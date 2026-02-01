@@ -226,30 +226,42 @@ export const aiAssistantRouter = router({
       const recentLeads = await aiProxy.getLeads(10);
       const recentAppointments = await aiProxy.getAppointments(10);
       
+      const leadSummary = (l: { id: number; name?: string | null; status?: string | null; phone?: string | null; email?: string | null; createdAt?: Date | string | null }) => {
+        const name = (l.name && String(l.name).trim()) || "Sem nome";
+        const status = STATUS_TRANSLATIONS[String(l.status ?? "")] ?? l.status ?? "—";
+        const phone = (l.phone && String(l.phone).trim()) || "—";
+        const email = (l.email && String(l.email).trim()) || "—";
+        return { id: l.id, name, status, phone, email, createdAt: formatDate(l.createdAt ?? null) };
+      };
       const contextData = {
-        leads: recentLeads.map(l => ({ id: l.id, name: l.name, status: STATUS_TRANSLATIONS[String(l.status ?? "")] ?? l.status ?? "", phone: l.phone, email: l.email, createdAt: formatDate(l.createdAt) })),
+        leads: recentLeads.map(leadSummary),
         appointments: recentAppointments.map(a => ({ title: a.title, type: a.type, startTime: formatDate(a.startTime) }))
       };
 
-      const systemPrompt = `Você é o Especialista em Vendas Imobiliárias do ChatLead Pro.
+      const systemPrompt = `Você é o Copiloto de Vendas do ChatLead Pro. Tom direto e objetivo.
 
 === REGRAS DE HONESTIDADE E AÇÃO (CRÍTICO) ===
-1. NUNCA MINTA: Não diga que criou algo se o usuário não clicou no botão.
-2. PROPOSTA: Diga "Clique no botão abaixo para confirmar" se tiver os dados.
-3. FORMATO OBRIGATÓRIO: :::action{"type": "ACAO", "data": {...}}:::
-4. SEMPRE use aspas duplas no JSON.
+1. NUNCA diga que criou/cadastrou algo se o usuário não clicou no botão.
+2. Para confirmar ação: "Clique no botão abaixo para confirmar."
+3. Ação no texto: :::action{"type": "ACAO", "data": {...}}::: (aspas duplas no JSON).
 
-=== ACESSO AOS DADOS ===
-- CONTEXTO ATUAL abaixo é a TABELA DE LEADS em tempo real. Use-a sempre.
+=== STATUS DOS LEADS (use só estes) ===
+Novo, Contatado, Qualificado, Perdido, Convertido.
+Leads "prontos para fechar" = status Qualificado ou Convertido.
 
-=== COLETA DE DADOS OBRIGATÓRIA ===
+=== RESPOSTA ===
+- Seja curto: 1 a 3 frases quando possível. Sem rodeios tipo "com base nos dados fornecidos".
+- Use os dados do CONTEXTO abaixo. Não invente status (ex.: não use "Proposta Enviada").
+- Ao listar lead, use os campos já formatados (não mostre "null"; no contexto já vem como "—" ou "Sem nome").
+
+=== AÇÕES DISPONÍVEIS ===
 - create_lead: name, phone, email.
 - create_appointment: leadId, time (YYYY-MM-DD HH:mm:ss), title.
-- update_lead_status: leadId, newStatus.
+- update_lead_status: leadId, newStatus (new|contacted|qualified|lost|converted).
 
 CONTEXTO ATUAL:
-- Leads: ${JSON.stringify(contextData.leads)}
-- Agendamentos: ${JSON.stringify(contextData.appointments)}`;
+Leads: ${JSON.stringify(contextData.leads)}
+Agendamentos: ${JSON.stringify(contextData.appointments)}`;
 
       try {
         const response = await invokeLLM({
@@ -282,7 +294,19 @@ CONTEXTO ATUAL:
 
         return { content, action, timestamp: new Date().toISOString(), conversationId };
       } catch (error) {
-        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Erro ao processar sua solicitação." });
+        console.error("[AI Assistant] chat error:", error);
+        if (error instanceof TRPCError) throw error;
+        const msg = error instanceof Error ? error.message : String(error);
+        if (/All LLM providers failed|GROQ|Hugging Face|Gemini failed|401|403|api key|API key/i.test(msg)) {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "Assistente de IA indisponível. Configure GROQ_API_KEY (ou HUGGING_FACE_API_KEY / Forge) no .env do backend.",
+          });
+        }
+        if (/database|Database|ECONNREFUSED|connection/i.test(msg)) {
+          throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco de dados indisponível. Tente novamente em instantes." });
+        }
+        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Erro ao processar sua solicitação. Tente novamente." });
       }
     }),
 

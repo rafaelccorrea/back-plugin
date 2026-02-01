@@ -1,4 +1,5 @@
 import "dotenv/config";
+import cors from "cors";
 import express from "express";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerOAuthRoutes } from "./_core/oauth";
@@ -7,6 +8,32 @@ import { appRouter } from "./routers";
 import { createContext } from "./_core/context";
 import { handleStripeWebhook } from "./webhooks/stripe";
 
+const DEFAULT_CORS_PATTERNS: RegExp[] = [
+  /^https?:\/\/localhost(:\d+)?$/,
+  /^https?:\/\/127\.0\.0\.1(:\d+)?$/,
+  /\.manuspre\.computer$/,
+  /\.manus\.computer$/,
+  /\.manus-asia\.computer$/,
+  /\.manuscomputer\.ai$/,
+  /\.manusvm\.computer$/,
+];
+
+/** Origens permitidas para CORS (frontend). Em dev sempre permite localhost; CORS_ORIGIN adiciona/sobrescreve. */
+function corsOrigin(origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) {
+  if (!origin) return callback(null, true);
+
+  const fromEnv = (process.env.CORS_ORIGIN || process.env.FRONTEND_URL || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const allowedList: (string | RegExp)[] =
+    fromEnv.length > 0 ? [...fromEnv, ...DEFAULT_CORS_PATTERNS] : DEFAULT_CORS_PATTERNS;
+
+  const ok = allowedList.some((o) => (typeof o === "string" ? o === origin : o.test(origin)));
+  callback(null, ok);
+}
+
 /**
  * Cria a aplicação Express com todas as rotas de API (tRPC, OAuth, webhooks).
  * Usado tanto no servidor Node (index.ts) quanto no handler serverless da Vercel (api/index.ts).
@@ -14,6 +41,16 @@ import { handleStripeWebhook } from "./webhooks/stripe";
  */
 export function createApp() {
   const app = express();
+
+  // CORS – permitir frontend (ex.: localhost:5173) e origens configuradas
+  app.use(
+    cors({
+      origin: corsOrigin,
+      credentials: true,
+      methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+      allowedHeaders: ["Content-Type", "Authorization", "X-API-Key"],
+    })
+  );
 
   // Stripe webhook DEVE vir ANTES de express.json() para receber o body bruto (verificação de assinatura)
   app.post(
