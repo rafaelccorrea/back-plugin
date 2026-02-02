@@ -81,6 +81,12 @@ export function createApp() {
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
+  // Raiz da API (útil quando só o backend está no ar, ex.: deploy só-backend na Vercel)
+  app.get("/api", (_req, res) => {
+    res.setHeader("Content-Type", "application/json");
+    res.json({ message: "API", docs: "/api/docs", trpc: "/api/trpc" });
+  });
+
   // Swagger / OpenAPI – documentação de todas as rotas (REST + tRPC)
   app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(openApiSpec as Record<string, unknown>));
   app.get("/api/docs.json", (_req, res) => {
