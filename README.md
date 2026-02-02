@@ -318,5 +318,3 @@ MIT
 ---
 
 **Desenvolvido com ❤️ para corretores e imobiliárias**
-
-# back-plugin
