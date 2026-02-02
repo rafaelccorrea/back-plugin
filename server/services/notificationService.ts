@@ -138,6 +138,61 @@ export async function markSupportRepliesAsReadForTicket(
 }
 
 /**
+ * Marcar todas as notificações support_reply do usuário como lidas (ex.: ao abrir a página de suporte).
+ */
+export async function markAllSupportRepliesAsRead(userId: number): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+
+  try {
+    const unread = await db
+      .select({ id: notifications.id })
+      .from(notifications)
+      .where(
+        and(
+          eq(notifications.userId, userId),
+          eq(notifications.type, "support_reply"),
+          eq(notifications.isRead, false)
+        )
+      );
+
+    let count = 0;
+    for (const row of unread) {
+      if (await markAsRead(row.id)) count++;
+    }
+    return count;
+  } catch (error) {
+    console.error("[NotificationService] Error marking all support replies as read:", error);
+    return 0;
+  }
+}
+
+/**
+ * Contar notificações support_reply não lidas do usuário (para badge).
+ */
+export async function getUnreadSupportCount(userId: number): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+
+  try {
+    const result = await db
+      .select({ id: notifications.id })
+      .from(notifications)
+      .where(
+        and(
+          eq(notifications.userId, userId),
+          eq(notifications.type, "support_reply"),
+          eq(notifications.isRead, false)
+        )
+      );
+    return result.length;
+  } catch (error) {
+    console.error("[NotificationService] Error counting unread support:", error);
+    return 0;
+  }
+}
+
+/**
  * Registrar uma subscrição de push notification
  */
 export async function subscribeToPushNotifications(

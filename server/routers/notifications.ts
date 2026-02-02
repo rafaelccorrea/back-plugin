@@ -349,6 +349,23 @@ export const notificationsRouter = router({
     }),
 
   /**
+   * Marcar todas as notificações de suporte (support_reply) do usuário como lidas.
+   * Útil ao abrir a página de suporte para zerar o badge de uma vez.
+   */
+  markAllSupportRepliesAsRead: protectedProcedure.mutation(async ({ ctx }) => {
+    const count = await notificationService.markAllSupportRepliesAsRead(ctx.user.id);
+    return { markedCount: count };
+  }),
+
+  /**
+   * Contar notificações de suporte não lidas (para badge).
+   */
+  getUnreadSupportCount: protectedProcedure.query(async ({ ctx }) => {
+    const count = await notificationService.getUnreadSupportCount(ctx.user.id);
+    return { count };
+  }),
+
+  /**
    * Marcar todas as notificações como lidas
    */
   markAllAsRead: protectedProcedure.mutation(async ({ ctx }) => {
