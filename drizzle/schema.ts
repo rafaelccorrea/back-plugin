@@ -61,6 +61,8 @@ export const users = pgTable(
     passwordResetExpires: timestamp("passwordResetExpires"),
     googleId: varchar("googleId", { length: 255 }).unique(),
     apiKey: varchar("apiKey", { length: 128 }).unique(),
+    captureToken: varchar("captureToken", { length: 64 }).unique(),
+    captureFormSettings: text("captureFormSettings"), // JSON: companyName, logoUrl, primaryColor, buttonText, thankYouMessage, showPoweredBy
     organizationId: integer("organizationId"),
     organizationRole: organizationRoleEnum("organizationRole").default("member"),
     stripeCustomerId: varchar("stripeCustomerId", { length: 255 }),

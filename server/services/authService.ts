@@ -34,13 +34,17 @@ export async function validatePassword(password: string, hash: string): Promise<
  * Gerar JWT token
  */
 export function generateJWT(payload: TokenPayload): string {
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+  console.log("[Auth:JWT] generateJWT payload userId=" + payload.userId + " email=" + payload.email + " role=" + payload.role + " expiresIn=" + JWT_EXPIRES_IN);
+  const token = jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+  console.log("[Auth:JWT] access token gerado, length=" + token.length);
+  return token;
 }
 
 /**
  * Gerar refresh token
  */
 export function generateRefreshToken(payload: TokenPayload): string {
+  console.log("[Auth:JWT] generateRefreshToken userId=" + payload.userId + " expiresIn=" + REFRESH_TOKEN_EXPIRES_IN);
   return jwt.sign(payload, JWT_SECRET, { expiresIn: REFRESH_TOKEN_EXPIRES_IN });
 }
 
@@ -49,8 +53,12 @@ export function generateRefreshToken(payload: TokenPayload): string {
  */
 export function verifyJWT(token: string): TokenPayload | null {
   try {
-    return jwt.verify(token, JWT_SECRET) as TokenPayload;
+    const payload = jwt.verify(token, JWT_SECRET) as TokenPayload;
+    console.log("[Auth:JWT] verifyJWT ok userId=" + payload.userId + " email=" + payload.email);
+    return payload;
   } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.log("[Auth:JWT] verifyJWT falhou:", msg);
     return null;
   }
 }

@@ -1,8 +1,8 @@
 import { z } from "zod";
 import { protectedProcedure, router } from "../_core/trpc";
 import { TRPCError } from "@trpc/server";
-import { getDb } from "../db";
-import { webhooks } from "../../drizzle/schema";
+import { getDb, ensureUserCaptureToken } from "../db";
+import { webhooks, users } from "../../drizzle/schema";
 import { eq } from "drizzle-orm";
 import { getUserQuotaInfo } from "../services/quotaManager";
 import { OUTGOING_EVENTS, type OutgoingEvent } from "../services/outgoingWebhookService";
@@ -147,4 +147,79 @@ export const integrationsRouter = router({
       return { allowed: false, planId: "free" };
     }
   }),
+
+  /**
+   * Obter link do formulário público de captura de leads (qualquer plano).
+   * Gera um captureToken se o usuário ainda não tiver.
+   */
+  getCaptureLink: protectedProcedure.query(async ({ ctx }) => {
+    const token = await ensureUserCaptureToken(ctx.user.id);
+    const baseUrl = process.env.FRONTEND_URL || process.env.VITE_APP_URL || "https://app.chatlead.pro";
+    const formUrl = `${baseUrl.replace(/\/$/, "")}/capture/${token}`;
+    return { captureToken: token, formUrl };
+  }),
+
+  /**
+   * Obter configuração white-label do formulário de captura.
+   */
+  getCaptureFormSettings: protectedProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) return { companyName: "", logoUrl: "", primaryColor: "#2563eb", buttonText: "Enviar", thankYouMessage: "Obrigado! Entraremos em contato em breve.", showPoweredBy: true };
+    const row = await db.select({ captureFormSettings: users.captureFormSettings, name: users.name }).from(users).where(eq(users.id, ctx.user.id)).limit(1);
+    const u = row[0];
+    if (!u) return { companyName: "", logoUrl: "", primaryColor: "#2563eb", buttonText: "Enviar", thankYouMessage: "Obrigado! Entraremos em contato em breve.", showPoweredBy: true };
+    let settings: Record<string, unknown> = {};
+    if (u.captureFormSettings) {
+      try {
+        settings = JSON.parse(u.captureFormSettings) as Record<string, unknown>;
+      } catch {
+        // ignore
+      }
+    }
+    return {
+      companyName: (settings.companyName as string) ?? u.name ?? "",
+      logoUrl: (settings.logoUrl as string) ?? "",
+      primaryColor: (settings.primaryColor as string) ?? "#2563eb",
+      buttonText: (settings.buttonText as string) ?? "Enviar",
+      thankYouMessage: (settings.thankYouMessage as string) ?? "Obrigado! Entraremos em contato em breve.",
+      showPoweredBy: settings.showPoweredBy !== false,
+    };
+  }),
+
+  /**
+   * Salvar configuração white-label do formulário de captura.
+   */
+  setCaptureFormSettings: protectedProcedure
+    .input(
+      z.object({
+        companyName: z.string().max(200).optional(),
+        logoUrl: z.union([z.string().url().max(2048), z.literal("")]).optional(),
+        primaryColor: z.string().max(20).optional(),
+        buttonText: z.string().max(80).optional(),
+        thankYouMessage: z.string().max(500).optional(),
+        showPoweredBy: z.boolean().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível" });
+      const row = await db.select({ captureFormSettings: users.captureFormSettings }).from(users).where(eq(users.id, ctx.user.id)).limit(1);
+      let current: Record<string, unknown> = {};
+      if (row[0]?.captureFormSettings) {
+        try {
+          current = JSON.parse(row[0].captureFormSettings) as Record<string, unknown>;
+        } catch {
+          // ignore
+        }
+      }
+      const merged = { ...current };
+      if (input.companyName !== undefined) merged.companyName = input.companyName;
+      if (input.logoUrl !== undefined) merged.logoUrl = input.logoUrl;
+      if (input.primaryColor !== undefined) merged.primaryColor = input.primaryColor;
+      if (input.buttonText !== undefined) merged.buttonText = input.buttonText;
+      if (input.thankYouMessage !== undefined) merged.thankYouMessage = input.thankYouMessage;
+      if (input.showPoweredBy !== undefined) merged.showPoweredBy = input.showPoweredBy;
+      await db.update(users).set({ captureFormSettings: JSON.stringify(merged) }).where(eq(users.id, ctx.user.id));
+      return { success: true };
+    }),
 });

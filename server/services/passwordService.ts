@@ -57,10 +57,12 @@ export function validatePassword(password: string): PasswordValidationResult {
  */
 export async function hashPassword(password: string): Promise<string> {
   try {
+    console.log("[Auth:Password] hashPassword chamado, saltRounds=" + SALT_ROUNDS);
     const hash = await bcrypt.hash(password, SALT_ROUNDS);
+    console.log("[Auth:Password] hash gerado, length=" + hash.length);
     return hash;
   } catch (error) {
-    console.error('[PasswordService] Error hashing password:', error);
+    console.error("[Auth:Password] Erro ao hashear senha:", error);
     throw new Error('Erro ao processar senha');
   }
 }
@@ -73,10 +75,12 @@ export async function comparePassword(
   hash: string
 ): Promise<boolean> {
   try {
+    console.log("[Auth:Password] comparePassword chamado, hash length=" + (hash?.length ?? 0));
     const isMatch = await bcrypt.compare(password, hash);
+    console.log("[Auth:Password] comparação:", isMatch ? "senha correta" : "senha incorreta");
     return isMatch;
   } catch (error) {
-    console.error('[PasswordService] Error comparing password:', error);
+    console.error("[Auth:Password] Erro ao comparar senha:", error);
     return false;
   }
 }

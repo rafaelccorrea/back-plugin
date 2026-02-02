@@ -21,6 +21,11 @@ function generateApiKey(): string {
   return randomBytes(32).toString("hex");
 }
 
+/** Token seguro para link de formulário público (captura de leads). */
+function generateCaptureToken(): string {
+  return randomBytes(24).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
 let _db: ReturnType<typeof drizzle> | null = null;
 let _pool: Pool | null = null;
 
@@ -149,6 +154,120 @@ export async function regenerateApiKey(userId: number): Promise<string> {
   await db.update(users).set({ apiKey: newApiKey }).where(eq(users.id, userId));
 
   return newApiKey;
+}
+
+/**
+ * Garante que o usuário tenha um captureToken (para link de formulário público).
+ * Cria um se não existir. Retorna o token.
+ */
+export async function ensureUserCaptureToken(userId: number): Promise<string> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  const row = await db.select({ captureToken: users.captureToken }).from(users).where(eq(users.id, userId)).limit(1);
+  const existing = row[0]?.captureToken;
+  if (existing) return existing;
+
+  let token: string;
+  for (let i = 0; i < 5; i++) {
+    token = generateCaptureToken();
+    try {
+      await db.update(users).set({ captureToken: token }).where(eq(users.id, userId));
+      return token;
+    } catch (e) {
+      // unique conflict, try again
+    }
+  }
+  throw new Error("Could not generate unique capture token");
+}
+
+export async function getUserByCaptureToken(token: string) {
+  const db = await getDb();
+  if (!db) return undefined;
+
+  const result = await db
+    .select()
+    .from(users)
+    .where(eq(users.captureToken, token))
+    .limit(1);
+
+  return result.length > 0 ? result[0] : undefined;
+}
+
+/** Linha normalizada para listagem admin (compatível com DB em camelCase ou snake_case). */
+export type UserRowForAdmin = {
+  id: number;
+  name: string | null;
+  email: string | null;
+  createdAt: Date | null;
+  lastSignedIn: Date | null;
+  isActive?: boolean;
+  isBanned?: boolean;
+};
+
+/**
+ * Lista usuários para o painel admin. Tenta Drizzle; em falha (ex.: colunas em snake_case),
+ * usa SQL bruto para compatibilidade com o banco existente.
+ */
+export async function listUsersForAdmin(limit: number, offset: number): Promise<UserRowForAdmin[]> {
+  const db = await getDb();
+  if (!db) return [];
+
+  try {
+    const rows = await db
+      .select({
+        id: users.id,
+        name: users.name,
+        email: users.email,
+        createdAt: users.createdAt,
+        lastSignedIn: users.lastSignedIn,
+      })
+      .from(users)
+      .orderBy(users.id)
+      .limit(limit)
+      .offset(offset);
+    return rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      email: r.email,
+      createdAt: r.createdAt,
+      lastSignedIn: r.lastSignedIn,
+      isActive: true,
+      isBanned: false,
+    }));
+  } catch (drizzleErr) {
+    console.warn("[Admin] Drizzle list users failed, trying raw SQL:", drizzleErr instanceof Error ? drizzleErr.message : drizzleErr);
+    if (!_pool) throw drizzleErr;
+
+    const rawQueries: { sql: string; label: string }[] = [
+      {
+        sql: `SELECT id, name, email, created_at AS "createdAt", last_signed_in AS "lastSignedIn" FROM users ORDER BY id LIMIT $1 OFFSET $2`,
+        label: "snake_case",
+      },
+      {
+        sql: `SELECT id, name, email, "createdAt", "lastSignedIn" FROM users ORDER BY id LIMIT $1 OFFSET $2`,
+        label: "camelCase",
+      },
+    ];
+
+    for (const { sql } of rawQueries) {
+      try {
+        const res = await _pool.query<{ id: number; name: string | null; email: string | null; createdAt: Date | null; lastSignedIn: Date | null }>(sql, [limit, offset]);
+        return (res.rows || []).map((r) => ({
+          id: r.id,
+          name: r.name,
+          email: r.email,
+          createdAt: r.createdAt,
+          lastSignedIn: r.lastSignedIn,
+          isActive: true,
+          isBanned: false,
+        }));
+      } catch {
+        continue;
+      }
+    }
+    throw drizzleErr;
+  }
 }
 
 // ============================================================================
@@ -534,7 +653,7 @@ export async function getUserByEmail(email: string) {
       .limit(1);
     return result.length > 0 ? result[0] : undefined;
   } catch {
-    // Fallback: table may lack "plan" or enum (migration 0005 not applied). Query without plan and default it.
+    // Fallback: table may use snake_case or camelCase column names
     if (!_pool) return undefined;
     try {
       const res = await _pool.query(
@@ -549,7 +668,21 @@ export async function getUserByEmail(email: string) {
       if (!row) return undefined;
       return mapUserRow(row) as Awaited<ReturnType<typeof getUserByEmail>>;
     } catch {
-      return undefined;
+      try {
+        const res = await _pool.query(
+          `SELECT id, "openId", name, email, "loginMethod", role, "passwordHash", "emailVerified",
+           "emailVerificationToken", "emailVerificationExpires", "passwordResetToken", "passwordResetExpires",
+           "googleId", "apiKey", "organizationId", "organizationRole", "stripeCustomerId", "stripeSubscriptionId",
+           "createdAt", "updatedAt", "lastSignedIn"
+           FROM users WHERE email = $1 LIMIT 1`,
+          [email]
+        );
+        const row = res.rows[0];
+        if (!row) return undefined;
+        return row as Awaited<ReturnType<typeof getUserByEmail>>;
+      } catch {
+        return undefined;
+      }
     }
   }
 }
@@ -575,6 +708,7 @@ export async function getUserByGoogleId(googleId: string) {
 
 /**
  * Get user by ID
+ * Tenta Drizzle; se falhar (ex.: colunas camelCase no banco), usa raw query.
  */
 export async function getUserById(userId: number) {
   const db = await getDb();
@@ -583,13 +717,30 @@ export async function getUserById(userId: number) {
     return undefined;
   }
 
-  const result = await db
-    .select()
-    .from(users)
-    .where(eq(users.id, userId))
-    .limit(1);
-
-  return result.length > 0 ? result[0] : undefined;
+  try {
+    const result = await db
+      .select()
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
+    return result.length > 0 ? result[0] : undefined;
+  } catch {
+    if (!_pool) return undefined;
+    try {
+      const res = await _pool.query(
+        `SELECT id, "openId", name, email, "loginMethod", role, "passwordHash", "emailVerified",
+         "emailVerificationToken", "emailVerificationExpires", "passwordResetToken", "passwordResetExpires",
+         "googleId", "apiKey", "organizationId", "organizationRole", "stripeCustomerId", "stripeSubscriptionId",
+         "createdAt", "updatedAt", "lastSignedIn"
+         FROM users WHERE id = $1 LIMIT 1`,
+        [userId]
+      );
+      const row = res.rows[0];
+      return row ? (row as Awaited<ReturnType<typeof getUserById>>) : undefined;
+    } catch {
+      return undefined;
+    }
+  }
 }
 
 /**

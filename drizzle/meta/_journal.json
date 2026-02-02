@@ -106,6 +106,13 @@
       "when": 1738282900000,
       "tag": "0014_copilot_conversation_title",
       "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1738283000000,
+      "tag": "0015_capture_form",
+      "breakpoints": true
     }
   ]
 }

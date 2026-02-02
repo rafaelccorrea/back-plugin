@@ -7,6 +7,8 @@ import { registerOAuthRoutes } from "./_core/oauth";
 import { registerGoogleOAuthRoutes } from "./_core/googleOAuth";
 import { appRouter } from "./routers";
 import { createContext } from "./_core/context";
+import { getUserByCaptureToken } from "./db";
+import { validateQuota } from "./services/quotaManager";
 import { handleStripeWebhook } from "./webhooks/stripe";
 import { openApiSpec } from "./swagger";
 
@@ -135,6 +137,79 @@ export function createApp() {
     }
   });
 
+  // GET: config do formulário público (white-label + se cota está esgotada). Público.
+  app.get("/api/capture/config/:token", async (req, res) => {
+    try {
+      const token = req.params.token?.trim();
+      if (!token) {
+        res.status(400).json({ error: { message: "Token ausente.", code: "BAD_REQUEST" } });
+        return;
+      }
+      const user = await getUserByCaptureToken(token);
+      if (!user) {
+        res.status(404).json({ error: { message: "Formulário não encontrado.", code: "NOT_FOUND" } });
+        return;
+      }
+      const quotaCheck = await validateQuota(user.id, "lead");
+      let settings: Record<string, unknown> = {};
+      if (user.captureFormSettings) {
+        try {
+          settings = JSON.parse(user.captureFormSettings) as Record<string, unknown>;
+        } catch {
+          // ignore invalid JSON
+        }
+      }
+      res.json({
+        companyName: settings.companyName ?? user.name ?? "Contato",
+        logoUrl: settings.logoUrl ?? null,
+        primaryColor: settings.primaryColor ?? "#2563eb",
+        buttonText: settings.buttonText ?? "Enviar",
+        thankYouMessage: settings.thankYouMessage ?? "Obrigado! Entraremos em contato em breve.",
+        showPoweredBy: settings.showPoweredBy !== false,
+        quotaExceeded: !quotaCheck.allowed,
+      });
+    } catch (err: unknown) {
+      console.error("[Capture] GET config error:", err);
+      res.status(500).json({ error: { message: "Erro ao carregar formulário.", code: "INTERNAL_SERVER_ERROR" } });
+    }
+  });
+
+  // REST: Formulário público de captura – token no body (link por usuário, sem expor API Key).
+  app.post("/api/capture", async (req, res) => {
+    try {
+      const { token, name, phone, email, source } = req.body ?? {};
+      if (!token || typeof token !== "string" || !name || typeof name !== "string" || !name.trim()) {
+        res.status(400).json({
+          error: { message: "token e name são obrigatórios.", code: "BAD_REQUEST" },
+        });
+        return;
+      }
+      const user = await getUserByCaptureToken(String(token).trim());
+      if (!user?.apiKey) {
+        res.status(401).json({
+          error: { message: "Link de formulário inválido ou expirado.", code: "UNAUTHORIZED" },
+        });
+        return;
+      }
+      const body = {
+        apiKey: user.apiKey,
+        name: String(name).trim(),
+        phone: typeof phone === "string" ? phone.trim() || undefined : undefined,
+        email: typeof email === "string" ? email.trim() || undefined : undefined,
+        source: typeof source === "string" && source.trim() ? source.trim() : "form_site",
+      };
+      const ctx = await createContext({ req, res });
+      const caller = appRouter.createCaller(ctx);
+      const result = await caller.webhooks.externalLead(body);
+      res.json(result);
+    } catch (err: unknown) {
+      const message = err && typeof err === "object" && "message" in err ? String((err as { message: unknown }).message) : "Falha ao enviar.";
+      const code = err && typeof err === "object" && "code" in err ? (err as { code: string }).code : "INTERNAL_SERVER_ERROR";
+      const status = code === "UNAUTHORIZED" ? 401 : code === "FORBIDDEN" ? 403 : 500;
+      res.status(status).json({ error: { message, code } });
+    }
+  });
+
   // REST: Refresh token (sem Authorization; usado quando o access token expira)
   app.post("/api/auth/refresh", async (req, res) => {
     try {
@@ -157,14 +232,19 @@ export function createApp() {
   registerOAuthRoutes(app);
   registerGoogleOAuthRoutes(app);
 
-  // tRPC API
-  app.use(
-    "/api/trpc",
-    createExpressMiddleware({
+  // tRPC API – ler Authorization do Express req e passar via res.locals (adapter usa Web API Request)
+  app.use("/api/trpc", (req, res) => {
+    (res as { locals?: { authHeader?: string } }).locals = (res as { locals?: { authHeader?: string } }).locals || {};
+    (res as { locals: { authHeader?: string } }).locals.authHeader =
+      req.headers.authorization ?? (req.headers as Record<string, string>)["authorization"];
+    const createContextWithAuth = (opts: Parameters<typeof createContext>[0]) =>
+      createContext({ ...opts, authHeaderFromReq: (res as { locals: { authHeader?: string } }).locals.authHeader } as Parameters<typeof createContext>[0]);
+    const middleware = createExpressMiddleware({
       router: appRouter,
-      createContext,
-    })
-  );
+      createContext: createContextWithAuth,
+    });
+    middleware(req, res);
+  });
 
   return app;
 }

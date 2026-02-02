@@ -100,47 +100,64 @@ export const authRouter = router({
     .mutation(async ({ input, ctx }) => {
       const { email, password } = input;
 
+      console.log("[Auth:Login] ═══════════════════════════════════════");
+      console.log("[Auth:Login] Requisição de login recebida, email=" + email);
+
       // Get user by email
       const user = await db.getUserByEmail(email);
       if (!user || !user.passwordHash) {
+        console.log("[Auth:Login] Falha: usuário não encontrado ou sem senha (email=" + email + ")");
         throw new Error("Email ou senha incorretos");
       }
+      console.log("[Auth:Login] Usuário encontrado id=" + user.id + " email=" + user.email);
 
       // Compare password
       const isPasswordValid = await comparePassword(password, user.passwordHash);
       if (!isPasswordValid) {
+        console.log("[Auth:Login] Falha: senha incorreta para email=" + email);
         throw new Error("Email ou senha incorretos");
       }
+      console.log("[Auth:Login] Senha validada com sucesso");
 
       // Check if email is verified
       if (!user.emailVerified) {
+        console.log("[Auth:Login] Falha: email não verificado para email=" + email);
         throw new Error(
           "Email não verificado. Por favor, verifique seu email antes de fazer login."
         );
       }
+      console.log("[Auth:Login] Email verificado ok");
 
-      // Update last signed in
-      await db.updateUser(user.id, {
-        lastSignedIn: new Date(),
-      });
+      // Update last signed in (opcional: falha não bloqueia login)
+      try {
+        await db.updateUser(user.id, { lastSignedIn: new Date() });
+        console.log("[Auth:Login] lastSignedIn atualizado");
+      } catch (e) {
+        console.warn("[Auth:Login] updateUser lastSignedIn falhou (ignorado):", e instanceof Error ? e.message : e);
+      }
 
       // Import JWT functions
       const { generateJWT, generateRefreshToken } = await import('../services/authService');
 
-      // Generate JWT tokens
       const tokenPayload = {
         userId: user.id.toString(),
         email: user.email || '',
         role: user.role || 'user',
       };
-
       const accessToken = generateJWT(tokenPayload);
       const refreshToken = generateRefreshToken(tokenPayload);
+      console.log("[Auth:Login] accessToken e refreshToken gerados");
 
       // Plano e status vêm da tabela subscriptions (não de users)
-      const subInfo = await db.getActiveUserSubscriptionInfo(user.id);
-      const plan = (subInfo?.plan ?? "free") as string;
-      const subscriptionStatus = subInfo?.status ?? null;
+      let plan = "free";
+      let subscriptionStatus: string | null = null;
+      try {
+        const subInfo = await db.getActiveUserSubscriptionInfo(user.id);
+        plan = (subInfo?.plan ?? "free") as string;
+        subscriptionStatus = subInfo?.status ?? null;
+      } catch (e) {
+        console.warn("[Auth:Login] getActiveUserSubscriptionInfo falhou (usando free):", e instanceof Error ? e.message : e);
+      }
 
       // Also set cookie for backward compatibility
       const cookieOptions = getSessionCookieOptions(ctx.req);
@@ -148,6 +165,9 @@ export const authRouter = router({
         ...cookieOptions,
         maxAge: ONE_YEAR_MS,
       });
+      console.log("[Auth:Login] Cookie de sessão definido");
+      console.log("[Auth:Login] Login concluído com sucesso para email=" + email);
+      console.log("[Auth:Login] ═══════════════════════════════════════");
 
       return {
         success: true,

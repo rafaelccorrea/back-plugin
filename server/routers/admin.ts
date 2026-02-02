@@ -1,7 +1,7 @@
 import { router, protectedProcedure, adminProcedure } from "../_core/trpc";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { getDb, getActiveUserPlan } from "../db";
+import { getDb, getActiveUserPlan, listUsersForAdmin } from "../db";
 import { eq } from "drizzle-orm";
 import { users, leads } from "../../drizzle/schema";
 
@@ -21,36 +21,28 @@ export const adminRouter = router({
     )
     .query(async ({ input }) => {
       try {
-        const db = await getDb();
-        if (!db) {
-          throw new TRPCError({
-            code: "INTERNAL_SERVER_ERROR",
-            message: "Banco de dados indisponível",
-          });
-        }
-
-        const allUsers = await db.select().from(users).limit(input.limit * 3).offset(input.offset);
-        let filteredUsers = allUsers as any[];
+        const allUsers = await listUsersForAdmin(input.limit * 3, input.offset);
+        let filteredUsers = allUsers;
         if (input.search) {
           const searchLower = input.search.toLowerCase();
           filteredUsers = allUsers.filter(
-            (u: any) =>
+            (u) =>
               u.name?.toLowerCase().includes(searchLower) ||
               u.email?.toLowerCase().includes(searchLower)
           );
         }
         const withPlans = await Promise.all(
-          filteredUsers.map(async (u: any) => {
+          filteredUsers.map(async (u) => {
             const plan = await getActiveUserPlan(u.id);
             return { ...u, plan: plan ?? "free" };
           })
         );
-        filteredUsers = input.plan ? withPlans.filter((u: any) => u.plan === input.plan) : withPlans;
-        const paginated = filteredUsers.slice(0, input.limit);
+        const byPlan = input.plan ? withPlans.filter((u) => u.plan === input.plan) : withPlans;
+        const paginated = byPlan.slice(0, input.limit);
 
         return {
           success: true,
-          data: paginated.map((u: any) => ({
+          data: paginated.map((u) => ({
             id: u.id,
             name: u.name,
             email: u.email,
@@ -58,10 +50,10 @@ export const adminRouter = router({
             isActive: u.isActive ?? true,
             isBanned: u.isBanned ?? false,
             createdAt: u.createdAt,
-            lastLogin: u.lastSignedIn ?? u.lastLogin,
+            lastLogin: u.lastSignedIn ?? null,
             totalLeads: 0,
           })),
-          total: filteredUsers.length,
+          total: byPlan.length,
         };
       } catch (error) {
         console.error("[Admin] Failed to get users:", error);
