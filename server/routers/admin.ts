@@ -1,7 +1,7 @@
 import { router, protectedProcedure, adminProcedure } from "../_core/trpc";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { getDb } from "../db";
+import { getDb, getActiveUserPlan } from "../db";
 import { eq } from "drizzle-orm";
 import { users, leads } from "../../drizzle/schema";
 
@@ -41,7 +41,7 @@ export const adminRouter = router({
         }
         const withPlans = await Promise.all(
           filteredUsers.map(async (u: any) => {
-            const plan = await db.getActiveUserPlan(u.id);
+            const plan = await getActiveUserPlan(u.id);
             return { ...u, plan: plan ?? "free" };
           })
         );
@@ -202,7 +202,7 @@ export const adminRouter = router({
       const planCounts: Record<string, number> = { free: 0, starter: 0, professional: 0, enterprise: 0 };
       await Promise.all(
         totalUsers.map(async (u: any) => {
-          const plan = (await db.getActiveUserPlan(u.id)) ?? "free";
+          const plan = (await getActiveUserPlan(u.id)) ?? "free";
           planCounts[plan] = (planCounts[plan] || 0) + 1;
         })
       );

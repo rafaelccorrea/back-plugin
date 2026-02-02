@@ -1,6 +1,6 @@
 import { protectedProcedure, router } from "../_core/trpc";
 import { TRPCError } from "@trpc/server";
-import { getDb, getActiveUserSubscriptionInfo, getUserSubscription } from "../db";
+import { getDb, getActiveUserPlan, getActiveUserSubscriptionInfo, getUserSubscription } from "../db";
 import { leads } from "../../drizzle/schema";
 import { and, eq, gte } from "drizzle-orm";
 import { getUserQuotaInfo } from "../services/quotaManager";
@@ -91,7 +91,7 @@ export const billingRouter = router({
       const db = await getDb();
       if (!db) throw new Error("Database not available");
 
-      const planId = (await db.getActiveUserPlan(ctx.user.id)) ?? "free";
+      const planId = (await getActiveUserPlan(ctx.user.id)) ?? "free";
       const plans: Record<string, any> = {
         free: { monthlyLeadsQuota: 10, monthlyApiCalls: 100 },
         starter: { monthlyLeadsQuota: 50, monthlyApiCalls: 1000 },
