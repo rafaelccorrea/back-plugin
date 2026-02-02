@@ -121,11 +121,13 @@ export async function markSupportRepliesAsReadForTicket(
 ): Promise<number> {
   const list = await getUnreadNotifications(userId);
   let count = 0;
+  const ticketIdNum = Number(ticketId);
   for (const n of list) {
     if (n.type !== "support_reply" || !n.data) continue;
     try {
-      const data = JSON.parse(n.data) as { ticketId?: number };
-      if (data?.ticketId === ticketId) {
+      const data = JSON.parse(n.data) as { ticketId?: number | string };
+      const nTicketId = data?.ticketId != null ? Number(data.ticketId) : NaN;
+      if (nTicketId === ticketIdNum) {
         if (await markAsRead(n.id)) count++;
       }
     } catch {
