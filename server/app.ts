@@ -84,7 +84,7 @@ export function createApp() {
   // Raiz da API (útil quando só o backend está no ar, ex.: deploy só-backend na Vercel)
   app.get("/api", (_req, res) => {
     res.setHeader("Content-Type", "application/json");
-    res.json({ message: "API", docs: "/api/docs", trpc: "/api/trpc" });
+    res.json({ message: "Hello World", docs: "/api/docs", trpc: "/api/trpc" });
   });
 
   // Swagger / OpenAPI – documentação de todas as rotas (REST + tRPC)
