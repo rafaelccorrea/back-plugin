@@ -1,12 +1,14 @@
 import "dotenv/config";
 import cors from "cors";
 import express from "express";
+import swaggerUi from "swagger-ui-express";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerOAuthRoutes } from "./_core/oauth";
 import { registerGoogleOAuthRoutes } from "./_core/googleOAuth";
 import { appRouter } from "./routers";
 import { createContext } from "./_core/context";
 import { handleStripeWebhook } from "./webhooks/stripe";
+import { openApiSpec } from "./swagger";
 
 const DEFAULT_CORS_PATTERNS: RegExp[] = [
   /^https?:\/\/localhost(:\d+)?$/,
@@ -78,6 +80,13 @@ export function createApp() {
   // Body parsers (depois do webhook para não consumir o body bruto do Stripe)
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
+
+  // Swagger / OpenAPI – documentação de todas as rotas (REST + tRPC)
+  app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(openApiSpec as Record<string, unknown>));
+  app.get("/api/docs.json", (_req, res) => {
+    res.setHeader("Content-Type", "application/json");
+    res.send(openApiSpec);
+  });
 
   // Manus debug collector (POST /__manus__/logs) – em dev o Vite trata; na Vercel o rewrite manda para /api/__manus__/logs
   app.post("/api/__manus__/logs", (req, res) => {
