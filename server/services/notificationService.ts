@@ -113,6 +113,29 @@ export async function markAsRead(notificationId: number): Promise<boolean> {
 }
 
 /**
+ * Marcar todas as notificações support_reply de um ticket como lidas (quando o usuário abre a conversa).
+ */
+export async function markSupportRepliesAsReadForTicket(
+  userId: number,
+  ticketId: number
+): Promise<number> {
+  const list = await getUnreadNotifications(userId);
+  let count = 0;
+  for (const n of list) {
+    if (n.type !== "support_reply" || !n.data) continue;
+    try {
+      const data = JSON.parse(n.data) as { ticketId?: number };
+      if (data?.ticketId === ticketId) {
+        if (await markAsRead(n.id)) count++;
+      }
+    } catch {
+      // ignore parse errors
+    }
+  }
+  return count;
+}
+
+/**
  * Registrar uma subscrição de push notification
  */
 export async function subscribeToPushNotifications(

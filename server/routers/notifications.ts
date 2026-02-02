@@ -336,6 +336,19 @@ export const notificationsRouter = router({
     }),
 
   /**
+   * Marcar notificações support_reply de um ticket como lidas (ao abrir a conversa).
+   */
+  markSupportRepliesAsReadForTicket: protectedProcedure
+    .input(z.object({ ticketId: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const count = await notificationService.markSupportRepliesAsReadForTicket(
+        ctx.user.id,
+        input.ticketId
+      );
+      return { markedCount: count };
+    }),
+
+  /**
    * Marcar todas as notificações como lidas
    */
   markAllAsRead: protectedProcedure.mutation(async ({ ctx }) => {
