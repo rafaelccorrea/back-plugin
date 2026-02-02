@@ -2,11 +2,17 @@
 
 O projeto está preparado para deploy na Vercel. O frontend (Vite/React) é servido como estático e a API (Express/tRPC, OAuth, webhooks) roda como **Serverless Function**.
 
-## Configuração
+## Deploy full stack (recomendado)
 
-- **Build:** `pnpm build` (gera `dist/public`, `dist/index.js` e `dist/api-handler.js`)
-- **Output:** `dist/public` (frontend estático)
-- **API:** `api/[[...path]].js` importa o app Express do bundle pré-compilado `dist/api-handler.js` (evita compilação TypeScript pela Vercel)
+Use a **raiz do repositório** como Root Directory na Vercel. O `vercel.json` e a pasta `api/` na raiz fazem o build do backend e do frontend e expõem a API. Veja `VERCEL_DEPLOY.md` na raiz.
+
+## Deploy apenas do backend
+
+Se quiser só a API na Vercel, use **Root Directory = `backend`**. Neste diretório:
+
+- **Build:** `pnpm build` (gera `dist/api-handler.js`)
+- **Output:** não usado (a API é servida pela função)
+- **API:** `api/[[...path]].js` importa o app Express do bundle `dist/api-handler.js`
 
 ## Variáveis de ambiente
 
