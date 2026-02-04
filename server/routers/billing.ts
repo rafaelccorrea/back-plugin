@@ -1,6 +1,6 @@
 import { protectedProcedure, router } from "../_core/trpc";
 import { TRPCError } from "@trpc/server";
-import { getDb, getActiveUserPlan, getActiveUserSubscriptionInfo, getUserSubscription } from "../db";
+import { getDb, getActiveUserPlan, getActiveUserSubscriptionInfo, getUserSubscription, getLatestSubscriptionStatus } from "../db";
 import { leads } from "../../drizzle/schema";
 import { and, eq, gte } from "drizzle-orm";
 import { getUserQuotaInfo } from "../services/quotaManager";
@@ -20,16 +20,57 @@ export const billingRouter = router({
       const subscription = await getUserSubscription(ctx.user.id);
 
       const planId = subInfo?.plan ?? "free";
-      const plans: Record<string, any> = {
-        free: { id: "free", name: "Gratis", description: "Plano gratuito", monthlyLeadsQuota: 10, monthlyApiCalls: 100, priceInCents: 0, currency: "USD" },
-        starter: { id: "starter", name: "Starter", description: "Para pequenos corretores", monthlyLeadsQuota: 50, monthlyApiCalls: 1000, priceInCents: 2900, currency: "USD" },
-        professional: { id: "professional", name: "Professional", description: "Plano profissional", monthlyLeadsQuota: 500, monthlyApiCalls: 10000, priceInCents: 7900, currency: "USD" },
-        enterprise: { id: "enterprise", name: "Enterprise", description: "Plano empresarial", monthlyLeadsQuota: 999999, monthlyApiCalls: 50000, priceInCents: 19900, currency: "USD" },
+      const plans: Record<string, { id: string; name: string; description: string; monthlyLeadsQuota: number; monthlyApiCalls: number; priceInCents: number; currency: string; features: string[] }> = {
+        free: {
+          id: "free",
+          name: "Gratis",
+          description: "Plano gratuito",
+          monthlyLeadsQuota: 10,
+          monthlyApiCalls: 100,
+          priceInCents: 0,
+          currency: "USD",
+          features: ["Até 10 leads por mês", "100 chamadas de API", "Dashboard básico", "Suporte por email"],
+        },
+        starter: {
+          id: "starter",
+          name: "Starter",
+          description: "Para pequenos corretores",
+          monthlyLeadsQuota: 50,
+          monthlyApiCalls: 1000,
+          priceInCents: 2900,
+          currency: "USD",
+          features: ["Até 50 leads por mês", "1.000 chamadas de API", "Dashboard completo", "Respostas sugeridas por IA", "Suporte por email"],
+        },
+        professional: {
+          id: "professional",
+          name: "Professional",
+          description: "Plano profissional",
+          monthlyLeadsQuota: 500,
+          monthlyApiCalls: 10000,
+          priceInCents: 7900,
+          currency: "USD",
+          features: ["Até 500 leads por mês", "10.000 chamadas de API", "Dashboard completo", "Respostas sugeridas por IA", "Prioridade de suporte", "Relatórios avançados", "API documentation"],
+        },
+        enterprise: {
+          id: "enterprise",
+          name: "Enterprise",
+          description: "Plano empresarial",
+          monthlyLeadsQuota: 999999,
+          monthlyApiCalls: 50000,
+          priceInCents: 19900,
+          currency: "USD",
+          features: ["Leads ilimitados", "50.000 chamadas de API", "Dashboard completo", "Respostas sugeridas por IA", "Suporte dedicado 24/7", "Relatórios avançados", "API documentation", "Integração customizada", "SLA garantido"],
+        },
       };
       const plan = plans[planId] || plans.free;
       const sub = subscription?.subscription;
       const periodStart = sub?.currentPeriodStart ? new Date(sub.currentPeriodStart).toISOString() : new Date().toISOString();
       const periodEnd = sub?.currentPeriodEnd ? new Date(sub.currentPeriodEnd).toISOString() : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+      let subscriptionStatus = subInfo?.status ?? null;
+      if (!subscriptionStatus && !subInfo) {
+        const latestStatus = await getLatestSubscriptionStatus(ctx.user.id);
+        if (latestStatus) subscriptionStatus = latestStatus;
+      }
 
       return {
         success: true,
@@ -41,7 +82,8 @@ export const billingRouter = router({
           monthlyApiCalls: plan.monthlyApiCalls,
           priceInCents: plan.priceInCents,
           currency: plan.currency,
-          subscriptionStatus: subInfo?.status ?? "active",
+          features: plan.features,
+          subscriptionStatus: subscriptionStatus ?? (subInfo ? "active" : null),
           currentPeriodStart: periodStart,
           currentPeriodEnd: periodEnd,
         },

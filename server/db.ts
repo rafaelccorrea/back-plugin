@@ -142,13 +142,14 @@ export async function getUserByApiKey(apiKey: string) {
     return undefined;
   }
 
+  let user: Awaited<ReturnType<typeof getUserByApiKey>> | undefined;
   try {
     const result = await db
       .select()
       .from(users)
       .where(eq(users.apiKey, apiKey))
       .limit(1);
-    return result.length > 0 ? result[0] : undefined;
+    user = result.length > 0 ? result[0] : undefined;
   } catch {
     if (!_pool) return undefined;
     try {
@@ -158,7 +159,7 @@ export async function getUserByApiKey(apiKey: string) {
       );
       const row = res.rows[0];
       if (!row) return undefined;
-      return {
+      user = {
         ...row,
         captureToken: null,
         captureFormSettings: null,
@@ -167,6 +168,12 @@ export async function getUserByApiKey(apiKey: string) {
       return undefined;
     }
   }
+
+  if (!user) return undefined;
+  // Quando a assinatura está expirada ou com pagamento pendente, a API Key não pode ser usada
+  const blocking = await hasBlockingSubscriptionStatus(user.id);
+  if (blocking) return undefined;
+  return user;
 }
 
 export async function regenerateApiKey(userId: number): Promise<string> {
@@ -592,7 +599,8 @@ async function getPlanTypeByPlanId(planId: number): Promise<string | null> {
     if (!row) return null;
     const fromColumn = row.plan_type ?? row.planType ?? row.type ?? null;
     if (fromColumn != null) return String(fromColumn);
-    return inferPlanTypeFromRow(row);
+    const inferred = inferPlanTypeFromRow(row);
+    return inferred ?? "free";
   } catch (err) {
     console.log("[getPlanTypeByPlanId] planId:", planId, "ERRO:", err instanceof Error ? err.message : err);
     return null;
@@ -619,8 +627,42 @@ export async function getActiveUserSubscriptionInfo(userId: number): Promise<{ p
   const sub = await getActiveSubscriptionRow(userId);
   if (!sub) return null;
   const plan = await getPlanTypeByPlanId(sub.planId);
-  if (!plan) return null;
-  return { plan, status: sub.status };
+  return { plan: plan ?? "free", status: sub.status };
+}
+
+/** Status possíveis de assinatura que bloqueiam uso (API Key e acesso ao app). */
+const BLOCKING_SUBSCRIPTION_STATUSES = ["past_due", "canceled", "unpaid"];
+
+/**
+ * Retorna o status da assinatura mais recente do usuário (qualquer status).
+ * Usado para saber se o usuário tem assinatura expirada/pendente e bloquear API Key / redirecionar para Minha Assinatura.
+ */
+export async function getLatestSubscriptionStatus(userId: number): Promise<string | null> {
+  await getDb();
+  if (!_pool) return null;
+  const queries: string[] = [
+    `SELECT status FROM subscriptions WHERE "userId" = $1 ORDER BY "updatedAt" DESC LIMIT 1`,
+    `SELECT status FROM subscriptions WHERE user_id = $1 ORDER BY updated_at DESC LIMIT 1`,
+  ];
+  for (const sql of queries) {
+    try {
+      const res = await _pool.query<{ status?: string }>(sql, [userId]);
+      const row = res.rows[0];
+      if (row?.status) return String(row.status);
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+/**
+ * Retorna true se o usuário tem assinatura que bloqueia uso (expirada, cancelada ou pagamento pendente).
+ * Nesse caso a API Key não deve funcionar e o app deve mostrar apenas a página Minha Assinatura.
+ */
+export async function hasBlockingSubscriptionStatus(userId: number): Promise<boolean> {
+  const status = await getLatestSubscriptionStatus(userId);
+  return status !== null && BLOCKING_SUBSCRIPTION_STATUSES.includes(status);
 }
 
 /** Obtém ou cria o plano FREE na tabela plans (para registro de assinatura free). */

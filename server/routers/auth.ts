@@ -454,8 +454,15 @@ export const authRouter = router({
     }
 
     const subInfo = await db.getActiveUserSubscriptionInfo(ctx.user.id);
-    const plan = (subInfo?.plan ?? "free") as string;
-    const subscriptionStatus = subInfo?.status ?? null;
+    let plan = (subInfo?.plan ?? "free") as string;
+    let subscriptionStatus = subInfo?.status ?? null;
+    // Se não há assinatura ativa, verificar se existe assinatura expirada/pendente (para mostrar "Minha Assinatura")
+    if (!subInfo) {
+      const latestStatus = await db.getLatestSubscriptionStatus(ctx.user.id);
+      if (latestStatus && ["past_due", "canceled", "unpaid"].includes(latestStatus)) {
+        subscriptionStatus = latestStatus;
+      }
+    }
 
     return {
       id: user.id,

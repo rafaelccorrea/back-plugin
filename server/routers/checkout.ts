@@ -196,21 +196,34 @@ export const checkoutRouter = router({
     }),
 
   /**
-   * Criar sessão do portal de billing
+   * Criar sessão do portal de billing (Stripe Customer Portal).
+   * Se o usuário ainda não tem customer no Stripe, cria um antes de abrir o portal.
    */
   createBillingPortalSession: protectedProcedure
     .input(z.object({ returnUrl: z.string().url() }))
     .mutation(async ({ ctx, input }) => {
       try {
-        if (!ctx.user.stripeCustomerId) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "Usuário não tem customer Stripe",
+        let stripeCustomerId: string | undefined = ctx.user.stripeCustomerId || undefined;
+
+        if (!stripeCustomerId) {
+          const db = await getDb();
+          if (!db) {
+            throw new TRPCError({
+              code: "INTERNAL_SERVER_ERROR",
+              message: "Banco de dados indisponível",
+            });
+          }
+          const customer = await createStripeCustomer({
+            email: ctx.user.email || "",
+            name: ctx.user.name || undefined,
+            metadata: { userId: ctx.user.id.toString() },
           });
+          stripeCustomerId = customer.id as string;
+          await db.update(users).set({ stripeCustomerId }).where(eq(users.id, ctx.user.id));
         }
 
         const session = await createBillingPortalSession(
-          ctx.user.stripeCustomerId,
+          stripeCustomerId,
           input.returnUrl
         );
 
@@ -220,11 +233,16 @@ export const checkoutRouter = router({
             url: session.url,
           },
         };
-      } catch (error) {
+      } catch (error: unknown) {
+        if (error instanceof TRPCError) throw error;
         console.error("[Checkout] Failed to create billing portal session:", error);
+        const message =
+          error instanceof Error
+            ? error.message
+            : "Falha ao criar sessão do portal de billing";
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
-          message: "Falha ao criar sessão do portal de billing",
+          message: message,
         });
       }
     }),

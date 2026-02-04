@@ -11,7 +11,7 @@ import {
   getActiveUserPlan,
   getUserByApiKey,
 } from "../db";
-import { analyzeConversation } from "../services/aiAnalysis";
+import { analyzeConversation, generateWhatsAppReply, type WhatsAppReplyContext } from "../services/aiAnalysis";
 import { TRPCError } from "@trpc/server";
 import { sanitizeObject } from "../middleware/security";
 import * as notificationService from "../services/notificationService";
@@ -26,6 +26,14 @@ const AnalyzePayloadSchema = z.object({
   conversation: z.string().min(10, "Conversation must be at least 10 characters"),
   contactName: z.string().optional(),
   contactPhone: z.string().optional(),
+});
+
+const GenerateReplyPayloadSchema = z.object({
+  apiKey: z.string().min(1),
+  conversation: z.string().min(1),
+  contactName: z.string().optional(),
+  contactPhone: z.string().optional(),
+  context: z.enum(["new_lead", "reply", "reengagement"]),
 });
 
 const UpdateLeadSchema = z.object({
@@ -72,6 +80,14 @@ export const leadsRouter = router({
         }
         const db = await getDb();
         if (!db) throw new Error("Database not available");
+
+        // Log extensão (nome/telefone enviados pelo plugin)
+        if (sanitized.contactName || sanitized.contactPhone) {
+          console.log("[ChatLead API] Extensão enviou:", {
+            contactName: sanitized.contactName || "(vazio)",
+            contactPhone: sanitized.contactPhone ? "***" + sanitized.contactPhone.slice(-4) : "(vazio)",
+          });
+        }
 
         // Analyze conversation with AI
         const analysis = await analyzeConversation(
@@ -219,6 +235,32 @@ export const leadsRouter = router({
             : `Failed to analyze conversation: ${causeMessage}`,
         });
       }
+    }),
+
+  /**
+   * Gera a próxima mensagem para o atendimento pela IA (extensão envia e depois digita no WhatsApp).
+   * Disponível para planos professional/enterprise.
+   */
+  generateReply: publicProcedure
+    .input(GenerateReplyPayloadSchema)
+    .mutation(async ({ input }) => {
+      const sanitized = sanitizeObject(input);
+      const apiKey = cleanApiKey(sanitized.apiKey);
+      const user = await getUserByApiKey(apiKey);
+      if (!user) throw new TRPCError({ code: "UNAUTHORIZED", message: "Invalid API Key" });
+      const plan = (await getActiveUserPlan(user.id)) ?? "free";
+      if (plan !== "professional" && plan !== "enterprise") {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Atendimento pela IA está disponível apenas nos planos Professional e Enterprise.",
+        });
+      }
+      const message = await generateWhatsAppReply(
+        sanitized.conversation,
+        sanitized.contactName || "Contato",
+        sanitized.context as WhatsAppReplyContext,
+      );
+      return { message };
     }),
 
   /**
@@ -398,6 +440,7 @@ export const leadsRouter = router({
     try {
       const usage = await getCurrentMonthUsage(ctx.user.id);
       const subscription = await getUserSubscription(ctx.user.id);
+      const plan = (await getActiveUserPlan(ctx.user.id)) ?? "free";
 
       return {
         success: true,
@@ -406,6 +449,7 @@ export const leadsRouter = router({
           apiCallsMade: usage.apiCallsMade,
           leadsQuota: subscription?.plan?.monthlyLeadsQuota || 0,
           apiCallsQuota: subscription?.plan?.monthlyApiCalls || 0,
+          plan,
         },
       };
     } catch (error) {
@@ -424,6 +468,7 @@ export const leadsRouter = router({
     try {
       const usage = await getCurrentMonthUsage(ctx.user.id);
       const subscription = await getUserSubscription(ctx.user.id);
+      const plan = (await getActiveUserPlan(ctx.user.id)) ?? "free";
 
       return {
         success: true,
@@ -432,6 +477,7 @@ export const leadsRouter = router({
           apiCallsMade: usage.apiCallsMade,
           leadsQuota: subscription?.plan?.monthlyLeadsQuota || 0,
           apiCallsQuota: subscription?.plan?.monthlyApiCalls || 0,
+          plan,
         },
       };
     } catch (error) {

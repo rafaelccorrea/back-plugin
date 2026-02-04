@@ -124,3 +124,56 @@ Conversa: ${conversation}`;
     return leadInfo.suggestedResponse || "Obrigado pelo interesse!";
   }
 }
+
+export type WhatsAppReplyContext = "new_lead" | "reply" | "reengagement";
+
+const SYSTEM_ATENDIMENTO = `Você é um corretor de imóveis prestando atendimento pelo WhatsApp. Seja cordial, objetivo e profissional.
+- Responda em português brasileiro, de forma natural e direta, como em uma conversa real.
+- Não use markdown, listas longas nem textos enormes. Uma ou duas frases curtas por vez são ideais.
+- Nunca invente dados (preços, endereços, prazos). Se não souber, diga que vai verificar e retornar.
+- Assine como se fosse o corretor (pode usar "Abraço", "Qualquer dúvida estou à disposição", etc.).`;
+
+/**
+ * Gera a próxima mensagem que a IA deve enviar no WhatsApp (atendimento conduzido pela IA).
+ */
+export async function generateWhatsAppReply(
+  conversation: string,
+  contactName: string,
+  context: WhatsAppReplyContext
+): Promise<string> {
+  const base = SYSTEM_ATENDIMENTO;
+  const contextInstructions: Record<WhatsAppReplyContext, string> = {
+    new_lead:
+      "O cliente acabou de iniciar contato ou demonstrou interesse. Dê boas-vindas, agradeça o contato e pergunte como pode ajudar (ex.: quer comprar, alugar, vender?). Seja breve.",
+    reply:
+      "O cliente já está em conversa. Responda de forma natural ao que ele disse, tire dúvidas e conduza para qualificação (orçamento, bairro, tipo de imóvel) sem ser invasivo.",
+    reengagement:
+      "O cliente não respondeu há um tempo (cerca de 1 hora ou mais). Envie UMA única mensagem curta e amigável para retomar o contato. Não seja insistente nem longo. Ex.: 'Oi! Passando aqui para saber se conseguiu ver aquelas opções que comentei. Qualquer dúvida estou à disposição 😊'",
+  };
+  const instruction = contextInstructions[context];
+  const userMessage = `Contexto: ${instruction}
+
+Nome do contato: ${contactName}
+
+Conversa até agora (formato "Cliente: ..." ou "Corretor: ..."):
+${conversation}
+
+Gere SOMENTE o texto da próxima mensagem que o corretor deve enviar. Sem aspas, sem explicações, sem "Mensagem:". Apenas o texto pronto para colar no WhatsApp.`;
+
+  try {
+    const response = await invokeLLM({
+      messages: [
+        { role: "system", content: base },
+        { role: "user", content: userMessage },
+      ],
+    });
+    const content = response.choices[0]?.message?.content;
+    let text = (typeof content === "string" ? content : JSON.stringify(content || "")).trim();
+    text = text.replace(/^["']|["']$/g, "").replace(/^Mensagem:\s*/i, "").trim();
+    return text.slice(0, 2000) || "Olá! Em que posso ajudar?";
+  } catch (error) {
+    console.error("[AI Analysis] generateWhatsAppReply error:", error);
+    if (context === "reengagement") return "Oi! Passando aqui para saber se tem alguma dúvida. Estou à disposição!";
+    return "Olá! Obrigado pelo contato. Em que posso ajudar?";
+  }
+}

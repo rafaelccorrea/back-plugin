@@ -280,7 +280,9 @@ export async function getCustomerBillingInfo(customerId: string) {
 }
 
 /**
- * Cria um portal de billing para o customer gerenciar sua subscription
+ * Cria um portal de billing para o customer gerenciar sua subscription.
+ * Use STRIPE_BILLING_PORTAL_CONFIGURATION_ID no .env com o ID da configuração
+ * (ex: bpc_xxx) para usar seu portal configurado no Dashboard do Stripe.
  */
 export async function createBillingPortalSession(
   customerId: string,
@@ -292,10 +294,16 @@ export async function createBillingPortalSession(
       throw new Error("Stripe client not initialized");
     }
 
-    const session = await stripeClient.billingPortal.sessions.create({
+    const params: { customer: string; return_url: string; configuration?: string } = {
       customer: customerId,
       return_url: returnUrl,
-    });
+    };
+    const configId = process.env.STRIPE_BILLING_PORTAL_CONFIGURATION_ID?.trim();
+    if (configId) {
+      params.configuration = configId;
+    }
+
+    const session = await stripeClient.billingPortal.sessions.create(params);
     return session;
   } catch (error) {
     console.error("[Stripe] Failed to create billing portal session:", error);
