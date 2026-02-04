@@ -1,6 +1,7 @@
 import { getDb } from "../db";
 import { notifications, pushSubscriptions, Notification, InsertNotification } from "../../drizzle/schema";
 import { eq, and, desc } from "drizzle-orm";
+import { sendNotificationToUser } from "../_core/websocket";
 
 export type NotificationType = 
   | "new_lead"
@@ -313,16 +314,26 @@ export async function sendPushNotification(
 }
 
 /**
- * Criar notificação de novo lead
+ * Criar notificação de novo lead (banco + WebSocket em tempo real)
  */
 export async function notifyNewLead(userId: number, leadData: { name?: string; phone?: string; neighborhood?: string }) {
-  return createNotification({
+  const title = "🎯 Novo Lead Capturado!";
+  const message = `Novo lead de ${leadData.name || "cliente"} em ${leadData.neighborhood || "área desejada"}`;
+  const created = await createNotification({
     userId,
     type: "new_lead",
-    title: "🎯 Novo Lead Capturado!",
-    message: `Novo lead de ${leadData.name || "cliente"} em ${leadData.neighborhood || "área desejada"}`,
+    title,
+    message,
     data: leadData,
   });
+  // Enviar em tempo real para o dashboard (atualiza contador e mostra toast)
+  sendNotificationToUser(String(userId), {
+    type: "new_lead",
+    title,
+    message,
+    sentAt: new Date().toISOString(),
+  });
+  return created;
 }
 
 /**

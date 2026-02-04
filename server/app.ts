@@ -46,7 +46,7 @@ function corsOrigin(origin: string | undefined, callback: (err: Error | null, al
 export function createApp() {
   const app = express();
 
-  // CORS – permitir frontend (ex.: localhost:5173) e origens configuradas
+  // CORS – permitir frontend (ex.: localhost:5174) e origens configuradas
   app.use(
     cors({
       origin: corsOrigin,

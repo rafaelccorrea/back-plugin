@@ -165,6 +165,7 @@ export const schemas = {
       apiKey: { type: "string" },
       conversation: { type: "string", minLength: 10 },
       contactName: { type: "string" },
+      contactPhone: { type: "string", description: "Telefone extraído do header do WhatsApp Web pela extensão" },
     },
   },
   LeadStatus: {

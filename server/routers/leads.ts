@@ -25,6 +25,7 @@ const AnalyzePayloadSchema = z.object({
   apiKey: z.string().min(1, "API Key is required"),
   conversation: z.string().min(10, "Conversation must be at least 10 characters"),
   contactName: z.string().optional(),
+  contactPhone: z.string().optional(),
 });
 
 const UpdateLeadSchema = z.object({
@@ -83,7 +84,10 @@ export const leadsRouter = router({
 
         // FILTRO: Só salva e notifica se for um lead em potencial
         if (analysis.isPotentialLead) {
-          const phone = analysis.phone || null;
+          // Preferir telefone capturado da extensão (header WhatsApp Web), senão o extraído pela IA
+          const rawExt = sanitized.contactPhone?.trim().replace(/\D/g, "") || "";
+          const fromExtension = rawExt.length >= 10 && rawExt.length <= 15 ? rawExt : null;
+          const phone = fromExtension || analysis.phone || null;
           
           // LÓGICA DE DUPLICADOS: Verificar se já existe um lead aberto com este telefone
           let existingLead = null;
