@@ -42,9 +42,18 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP DEFAULT NOW();
 -- Adicionar coluna lastSignedIn
 ALTER TABLE users ADD COLUMN IF NOT EXISTS "lastSignedIn" TIMESTAMP;
 
+-- Formulário público de captura (equivalente à migration 0015_capture_form)
+ALTER TABLE users ADD COLUMN IF NOT EXISTS "captureToken" VARCHAR(64) UNIQUE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS "captureFormSettings" TEXT;
+
 -- Remover NOT NULL de openId e apiKey para permitir login com email/senha
 ALTER TABLE users ALTER COLUMN "openId" DROP NOT NULL;
 ALTER TABLE users ALTER COLUMN "apiKey" DROP NOT NULL;
+
+-- ============================================================================
+-- Webhooks – coluna secret (se a migration 0007 foi aplicada sem ela)
+-- ============================================================================
+ALTER TABLE webhooks ADD COLUMN IF NOT EXISTS "secret" VARCHAR(128);
 
 -- Verificar estrutura atualizada
 SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_name = 'users' ORDER BY ordinal_position;

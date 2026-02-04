@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { protectedProcedure, router } from "../_core/trpc";
 import { TRPCError } from "@trpc/server";
-import { getDb, ensureUserCaptureToken } from "../db";
+import { getDb, ensureUserCaptureToken, getWebhookByUserId } from "../db";
 import { webhooks, users } from "../../drizzle/schema";
 import { eq } from "drizzle-orm";
 import { getUserQuotaInfo } from "../services/quotaManager";
@@ -38,30 +38,22 @@ export const integrationsRouter = router({
    */
   getWebhookConfig: protectedProcedure.query(async ({ ctx }) => {
     await requireProfessionalPlan(ctx);
-    const db = await getDb();
-    if (!db) return { url: null, events: [], isActive: false, lastTriggeredAt: null, failureCount: 0, hasSecret: false };
+    const row = await getWebhookByUserId(ctx.user.id, false);
+    if (!row) return { url: null, events: [], isActive: false, lastTriggeredAt: null, failureCount: 0, hasSecret: false };
+    let eventsList: OutgoingEvent[] = [];
     try {
-      const rows = await db.select().from(webhooks).where(eq(webhooks.userId, ctx.user.id)).limit(1);
-      const row = rows[0];
-      if (!row) return { url: null, events: [], isActive: false, lastTriggeredAt: null, failureCount: 0, hasSecret: false };
-      let eventsList: OutgoingEvent[] = [];
-      try {
-        eventsList = JSON.parse(row.events) as OutgoingEvent[];
-      } catch {
-        eventsList = [];
-      }
-      return {
-        url: row.url,
-        events: eventsList,
-        isActive: row.isActive ?? true,
-        lastTriggeredAt: row.lastTriggeredAt,
-        failureCount: row.failureCount ?? 0,
-        hasSecret: Boolean(row.secret && row.secret.trim()),
-      };
-    } catch (err) {
-      console.error("[Integrations] getWebhookConfig query failed (tabela webhooks pode não existir):", err);
-      return { url: null, events: [], isActive: false, lastTriggeredAt: null, failureCount: 0, hasSecret: false };
+      eventsList = JSON.parse(row.events) as OutgoingEvent[];
+    } catch {
+      eventsList = [];
     }
+    return {
+      url: row.url,
+      events: eventsList,
+      isActive: row.isActive ?? true,
+      lastTriggeredAt: row.lastTriggeredAt,
+      failureCount: row.failureCount ?? 0,
+      hasSecret: Boolean(row.secret?.trim()),
+    };
   }),
 
   /**

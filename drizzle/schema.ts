@@ -323,19 +323,20 @@ export type AuditLog = typeof auditLog.$inferSelect;
 export type InsertAuditLog = typeof auditLog.$inferInsert;
 
 /**
- * Webhooks – colunas em snake_case para compatibilidade com o banco.
+ * Webhooks – nomes das colunas no banco (camelCase ou snake_case conforme o que existir no DB).
+ * Se o erro for "user_id does not exist", o banco tem "userId"; use integer("userId").
  */
 export const webhooks = pgTable("webhooks", {
   id: serial("id").primaryKey(),
-  userId: integer("user_id").notNull(),
+  userId: integer("userId").notNull(),
   url: varchar("url", { length: 2048 }).notNull(),
   events: text("events").notNull(),
   secret: varchar("secret", { length: 128 }),
-  isActive: boolean("is_active").default(true),
-  lastTriggeredAt: timestamp("last_triggered_at"),
-  failureCount: integer("failure_count").default(0),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  isActive: boolean("isActive").default(true),
+  lastTriggeredAt: timestamp("lastTriggeredAt"),
+  failureCount: integer("failureCount").default(0),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().notNull(),
 });
 
 export type Webhook = typeof webhooks.$inferSelect;

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { publicProcedure, router } from "../_core/trpc";
-import { getDb, createLead } from "../db";
-import { users, leads } from "../../drizzle/schema";
+import { getDb, createLead, getUserByApiKey } from "../db";
+import { leads } from "../../drizzle/schema";
 import { eq } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { analyzeConversation } from "../services/aiAnalysis";
@@ -37,18 +37,17 @@ export const webhooksRouter = router({
     .mutation(async ({ input }) => {
       try {
         const apiKey = cleanApiKey(input.apiKey);
-        const db = await getDb();
-        if (!db) throw new Error("Database not available");
-
-        // 1. Validar Usuário
-        const userResult = await db.select().from(users).where(eq(users.apiKey, apiKey)).limit(1);
-        if (userResult.length === 0) {
+        const user = await getUserByApiKey(apiKey);
+        if (!user) {
           throw new TRPCError({
             code: "UNAUTHORIZED",
             message: "Invalid API Key",
           });
         }
-        const user = userResult[0];
+        const db = await getDb();
+        if (!db) throw new Error("Database not available");
+
+        // 1. Usuário já validado acima
 
         let analysis = null;
         

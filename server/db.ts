@@ -13,6 +13,7 @@ import {
   organizations,
   InsertOrganization,
   plans,
+  webhooks,
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 import { randomBytes } from "crypto";
@@ -128,6 +129,12 @@ export async function getUserByOpenId(openId: string) {
   return result.length > 0 ? result[0] : undefined;
 }
 
+/** Colunas de users que existem em todo deploy (sem captureToken/captureFormSettings). Usado quando a migration 0015 não foi aplicada. */
+const USER_CORE_COLUMNS_SQL = `SELECT id, "openId", name, email, "loginMethod", role, "passwordHash", "emailVerified",
+  "emailVerificationToken", "emailVerificationExpires", "passwordResetToken", "passwordResetExpires",
+  "googleId", "apiKey", "organizationId", "organizationRole", "stripeCustomerId", "stripeSubscriptionId",
+  "createdAt", "updatedAt", "lastSignedIn" FROM users`;
+
 export async function getUserByApiKey(apiKey: string) {
   const db = await getDb();
   if (!db) {
@@ -135,13 +142,31 @@ export async function getUserByApiKey(apiKey: string) {
     return undefined;
   }
 
-  const result = await db
-    .select()
-    .from(users)
-    .where(eq(users.apiKey, apiKey))
-    .limit(1);
-
-  return result.length > 0 ? result[0] : undefined;
+  try {
+    const result = await db
+      .select()
+      .from(users)
+      .where(eq(users.apiKey, apiKey))
+      .limit(1);
+    return result.length > 0 ? result[0] : undefined;
+  } catch {
+    if (!_pool) return undefined;
+    try {
+      const res = await _pool.query(
+        `${USER_CORE_COLUMNS_SQL} WHERE "apiKey" = $1 LIMIT 1`,
+        [apiKey]
+      );
+      const row = res.rows[0];
+      if (!row) return undefined;
+      return {
+        ...row,
+        captureToken: null,
+        captureFormSettings: null,
+      } as Awaited<ReturnType<typeof getUserByApiKey>>;
+    } catch {
+      return undefined;
+    }
+  }
 }
 
 export async function regenerateApiKey(userId: number): Promise<string> {
@@ -432,23 +457,89 @@ export async function getCurrentMonthUsage(userId: number) {
 // SUBSCRIPTION & BILLING
 // ============================================================================
 
-export async function getUserSubscription(userId: number) {
+export type UserSubscriptionResult = {
+  subscription: typeof subscriptions.$inferSelect;
+  plan: typeof plans.$inferSelect | null;
+} | null;
+
+export async function getUserSubscription(userId: number): Promise<UserSubscriptionResult> {
   const db = await getDb();
   if (!db) {
     throw new Error("Database not available");
   }
 
-  const result = await db
-    .select({
-      subscription: subscriptions,
-      plan: plans,
-    })
-    .from(subscriptions)
-    .leftJoin(plans, eq(subscriptions.planId, plans.id))
-    .where(eq(subscriptions.userId, userId))
-    .limit(1);
-
-  return result.length > 0 ? result[0] : null;
+  try {
+    const result = await db
+      .select({
+        subscription: subscriptions,
+        plan: plans,
+      })
+      .from(subscriptions)
+      .leftJoin(plans, eq(subscriptions.planId, plans.id))
+      .where(eq(subscriptions.userId, userId))
+      .limit(1);
+    return result.length > 0 ? result[0] : null;
+  } catch {
+    if (!_pool) return null;
+    const queries: Array<{ sql: string }> = [
+      {
+        sql: `SELECT s.id AS sub_id, s.user_id AS sub_user_id, s.plan_id, s.stripe_subscription_id, s.status AS sub_status,
+         s.current_period_start, s.current_period_end, s.canceled_at, s.created_at AS sub_created_at, s.updated_at AS sub_updated_at,
+         p.id AS p_id, p.name AS plan_name, p.description AS plan_description, p.stripe_price_id, p.monthly_leads_quota, p.monthly_api_calls,
+         p.price_in_cents, p.currency, p.features, p.is_active, p.created_at AS plan_created_at, p.updated_at AS plan_updated_at
+         FROM subscriptions s LEFT JOIN plans p ON s.plan_id = p.id WHERE s.user_id = $1 LIMIT 1`,
+      },
+      {
+        sql: `SELECT s.id AS sub_id, s."userId" AS sub_user_id, s."planId" AS plan_id, s."stripeSubscriptionId" AS stripe_subscription_id, s.status AS sub_status,
+         s."currentPeriodStart" AS current_period_start, s."currentPeriodEnd" AS current_period_end, s."canceledAt" AS canceled_at, s."createdAt" AS sub_created_at, s."updatedAt" AS sub_updated_at,
+         p.id AS p_id, p.name AS plan_name, p.description AS plan_description, p."stripePriceId" AS stripe_price_id, p."monthlyLeadsQuota" AS monthly_leads_quota, p."monthlyApiCalls" AS monthly_api_calls,
+         p."priceInCents" AS price_in_cents, p.currency, p.features, p."isActive" AS is_active, p."createdAt" AS plan_created_at, p."updatedAt" AS plan_updated_at
+         FROM subscriptions s LEFT JOIN plans p ON s."planId" = p.id WHERE s."userId" = $1 LIMIT 1`,
+      },
+    ];
+    for (const { sql } of queries) {
+      try {
+        const res = await _pool.query(sql, [userId]);
+        const row = res.rows[0] as Record<string, unknown> | undefined;
+        if (!row) return null;
+        const sub = {
+          id: row.sub_id,
+          userId: row.sub_user_id,
+          planId: row.plan_id,
+          stripeSubscriptionId: row.stripe_subscription_id,
+          status: row.sub_status,
+          currentPeriodStart: row.current_period_start,
+          currentPeriodEnd: row.current_period_end,
+          canceledAt: row.canceled_at,
+          createdAt: row.sub_created_at,
+          updatedAt: row.sub_updated_at,
+        };
+        const planType =
+          (row as Record<string, unknown>).plan_type ??
+          inferPlanTypeFromRow({ name: row.plan_name, stripe_price_id: row.stripe_price_id, stripePriceId: row.stripe_price_id }) ??
+          "free";
+        const planRow = row.p_id != null ? {
+          id: row.p_id,
+          planType,
+          name: row.plan_name,
+          description: row.plan_description,
+          stripePriceId: row.stripe_price_id,
+          monthlyLeadsQuota: row.monthly_leads_quota,
+          monthlyApiCalls: row.monthly_api_calls,
+          priceInCents: row.price_in_cents,
+          currency: row.currency,
+          features: row.features,
+          isActive: row.is_active,
+          createdAt: row.plan_created_at,
+          updatedAt: row.plan_updated_at,
+        } : null;
+        return { subscription: sub as typeof subscriptions.$inferSelect, plan: planRow as typeof plans.$inferSelect | null };
+      } catch {
+        continue;
+      }
+    }
+    return null;
+  }
 }
 
 /** Busca assinatura ativa do usuário (tenta camelCase e snake_case). Retorna { planId, status } ou null. */
@@ -571,6 +662,65 @@ export async function ensureUserHasFreeSubscription(userId: number): Promise<voi
     currentPeriodEnd: end,
   };
   await db.insert(subscriptions).values(freeSub);
+}
+
+// ============================================================================
+// WEBHOOKS (leitura resiliente: coluna secret pode não existir no banco)
+// ============================================================================
+
+export type WebhookRowForDispatch = {
+  id: number;
+  userId: number;
+  url: string;
+  events: string;
+  secret: string | null;
+  isActive: boolean | null;
+  lastTriggeredAt: Date | null;
+  failureCount: number | null;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+/**
+ * Busca webhook ativo do usuário. Tenta Drizzle; se falhar (ex.: coluna "secret" inexistente),
+ * usa SQL bruto sem a coluna secret e retorna secret como null.
+ */
+export async function getWebhookByUserId(userId: number, activeOnly = true): Promise<WebhookRowForDispatch | null> {
+  const db = await getDb();
+  if (!db) return null;
+
+  try {
+    const rows = activeOnly
+      ? await db.select().from(webhooks).where(and(eq(webhooks.userId, userId), eq(webhooks.isActive, true))).limit(1)
+      : await db.select().from(webhooks).where(eq(webhooks.userId, userId)).limit(1);
+    const row = rows[0];
+    if (!row) return null;
+    return {
+      id: row.id,
+      userId: row.userId,
+      url: row.url,
+      events: row.events,
+      secret: row.secret ?? null,
+      isActive: row.isActive,
+      lastTriggeredAt: row.lastTriggeredAt,
+      failureCount: row.failureCount,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    };
+  } catch {
+    if (!_pool) return null;
+    const sql = activeOnly
+      ? `SELECT id, "userId", url, events, "isActive", "lastTriggeredAt", "failureCount", "createdAt", "updatedAt" FROM webhooks WHERE "userId" = $1 AND "isActive" = true LIMIT 1`
+      : `SELECT id, "userId", url, events, "isActive", "lastTriggeredAt", "failureCount", "createdAt", "updatedAt" FROM webhooks WHERE "userId" = $1 LIMIT 1`;
+    try {
+      const res = await _pool.query<WebhookRowForDispatch>(sql, [userId]);
+      const row = res.rows[0];
+      if (!row) return null;
+      return { ...row, secret: null };
+    } catch {
+      return null;
+    }
+  }
 }
 
 // ============================================================================

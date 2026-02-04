@@ -2,11 +2,14 @@ import { z } from "zod";
 import { protectedProcedure, publicProcedure, router } from "../_core/trpc";
 import {
   createLead,
+  getDb,
   getLeadsByUserId,
   getLeadById,
   updateLead,
   getCurrentMonthUsage,
   getUserSubscription,
+  getActiveUserPlan,
+  getUserByApiKey,
 } from "../db";
 import { analyzeConversation } from "../services/aiAnalysis";
 import { TRPCError } from "@trpc/server";
@@ -15,9 +18,8 @@ import * as notificationService from "../services/notificationService";
 import { dispatchOutgoingWebhook } from "../services/outgoingWebhookService";
 import { processOpenClawAutomations } from "../services/openClawService";
 import { validateQuota, incrementLeadsUsage } from "../services/quotaManager";
-import { getDb } from "../db";
-import { users, leads } from "../../drizzle/schema";
-import { eq, and, or, inArray, desc } from "drizzle-orm";
+import { leads } from "../../drizzle/schema";
+import { eq, and, inArray, desc } from "drizzle-orm";
 
 const AnalyzePayloadSchema = z.object({
   apiKey: z.string().min(1, "API Key is required"),
@@ -59,18 +61,16 @@ export const leadsRouter = router({
         const sanitized = sanitizeObject(input);
         const apiKey = cleanApiKey(sanitized.apiKey);
 
-        // Buscar usuário pelo API Key primeiro
-        const db = await getDb();
-        if (!db) throw new Error("Database not available");
-        
-        const userResult = await db.select().from(users).where(eq(users.apiKey, apiKey)).limit(1);
-        if (userResult.length === 0) {
+        // Buscar usuário pelo API Key (usa getUserByApiKey para compatibilidade com DB sem colunas capture*)
+        const user = await getUserByApiKey(apiKey);
+        if (!user) {
           throw new TRPCError({
             code: "UNAUTHORIZED",
             message: "Invalid API Key",
           });
         }
-        const user = userResult[0];
+        const db = await getDb();
+        if (!db) throw new Error("Database not available");
 
         // Analyze conversation with AI
         const analysis = await analyzeConversation(
@@ -186,7 +186,8 @@ export const leadsRouter = router({
             });
 
             // Disparar automações do OpenClaw (apenas planos professional/enterprise)
-            if (user.plan === "professional" || user.plan === "enterprise") {
+            const userPlan = (await getActiveUserPlan(user.id)) ?? "free";
+            if (userPlan === "professional" || userPlan === "enterprise") {
               const fullLeadResult = await db.select().from(leads).where(eq(leads.id, leadId)).limit(1);
               if (fullLeadResult.length > 0) {
                 void processOpenClawAutomations(user.id, "new_lead", fullLeadResult[0]);
@@ -204,9 +205,14 @@ export const leadsRouter = router({
       } catch (error) {
         console.error("[Leads] Error analyzing conversation:", error);
         if (error instanceof TRPCError) throw error;
+        const causeMessage = error instanceof Error ? error.message : String(error);
+        const isConfigError =
+          /GROQ_API_KEY|gsk_|No response from AI|Groq failed/i.test(causeMessage);
         throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Failed to analyze conversation",
+          code: isConfigError ? "BAD_REQUEST" : "INTERNAL_SERVER_ERROR",
+          message: isConfigError
+            ? `Análise de conversa indisponível: ${causeMessage}. Configure GROQ_API_KEY no .env (chave em console.groq.com).`
+            : `Failed to analyze conversation: ${causeMessage}`,
         });
       }
     }),

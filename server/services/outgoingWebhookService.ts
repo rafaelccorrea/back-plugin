@@ -1,7 +1,7 @@
 import * as crypto from "node:crypto";
-import { getDb } from "../db";
+import { getDb, getWebhookByUserId } from "../db";
 import { webhooks } from "../../drizzle/schema";
-import { eq, and } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 
 export const OUTGOING_EVENTS = [
   "lead.created",
@@ -22,10 +22,7 @@ function parseEvents(eventsJson: string): OutgoingEvent[] {
 }
 
 export async function getOutgoingWebhookConfig(userId: number) {
-  const db = await getDb();
-  if (!db) return null;
-  const rows = await db.select().from(webhooks).where(eq(webhooks.userId, userId)).limit(1);
-  const row = rows[0];
+  const row = await getWebhookByUserId(userId, false);
   if (!row || !row.isActive) return null;
   return {
     id: row.id,
@@ -102,11 +99,10 @@ export async function dispatchOutgoingWebhook(
   event: OutgoingEvent,
   payload: Record<string, unknown>
 ): Promise<void> {
+  const row = await getWebhookByUserId(userId, true);
+  if (!row) return;
   const db = await getDb();
   if (!db) return;
-  const rows = await db.select().from(webhooks).where(and(eq(webhooks.userId, userId), eq(webhooks.isActive, true))).limit(1);
-  const row = rows[0];
-  if (!row) return;
   const events = parseEvents(row.events);
   if (!events.includes(event)) return;
 
@@ -117,8 +113,8 @@ export async function dispatchOutgoingWebhook(
   });
 
   const headers: Record<string, string> = { "Content-Type": "application/json" };
-  const secret = row.secret ?? undefined;
-  if (secret && secret.trim()) {
+  const secret = row.secret?.trim();
+  if (secret) {
     const sig = crypto.createHmac("sha256", secret.trim()).update(body, "utf8").digest("hex");
     headers["X-Webhook-Signature"] = `sha256=${sig}`;
   }
@@ -130,7 +126,7 @@ export async function dispatchOutgoingWebhook(
     const db2 = await getDb();
     if (!db2) return;
     try {
-      const acked = await sendChallengeAndVerify(row.url, nonce, headers, row.secret);
+      const acked = await sendChallengeAndVerify(row.url, nonce, headers, row.secret ?? null);
       if (!acked) {
         await db2
           .update(webhooks)

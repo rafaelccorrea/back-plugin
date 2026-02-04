@@ -203,104 +203,14 @@ async function invokeGroq(params: InvokeParams): Promise<InvokeResult> {
 }
 
 /**
- * Invoca Hugging Face
+ * Provedor de IA: apenas Groq (Llama).
  */
-async function invokeHuggingFace(params: InvokeParams): Promise<InvokeResult> {
-  const { messages, response_format } = params;
-  const model = "Qwen/Qwen2.5-72B-Instruct";
-  const url = `https://router.huggingface.co/models/${model}/v1/chat/completions`;
-
-  const payload: Record<string, unknown> = {
-    model: model,
-    messages: messages.map(normalizeMessage),
-    stream: false
-  };
-
-  if (response_format) payload.response_format = response_format;
-
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${ENV.huggingFaceApiKey}`,
-    },
-    body: JSON.stringify(payload),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Hugging Face failed: ${response.status} - ${errorText}`);
-  }
-
-  const data = await response.json();
-  return data as InvokeResult;
-}
-
-/**
- * Fallback Principal: Gemini/Forge
- */
-async function invokeGemini(params: InvokeParams): Promise<InvokeResult> {
-  const { messages, tools, toolChoice, tool_choice, response_format } = params;
-
-  const payload: Record<string, unknown> = {
-    model: "gemini-2.5-flash",
-    messages: messages.map(normalizeMessage),
-  };
-
-  if (tools && tools.length > 0) payload.tools = tools;
-  if (toolChoice || tool_choice) payload.tool_choice = toolChoice || tool_choice;
-  if (response_format) payload.response_format = response_format;
-
-  const url = ENV.forgeApiUrl 
-    ? `${ENV.forgeApiUrl.replace(/\/$/, "")}/v1/chat/completions`
-    : "http://localhost:5000/v1/chat/completions";
-
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${ENV.forgeApiKey}`,
-    },
-    body: JSON.stringify(payload),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Gemini failed: ${response.status} - ${errorText}`);
-  }
-
-  return (await response.json()) as InvokeResult;
-}
-
 export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
-  const errors: string[] = [];
-
-  // 1. Tentar Groq se a chave existir
-  if (ENV.groqApiKey && ENV.groqApiKey.startsWith("gsk_")) {
-    try {
-      return await invokeGroq(params);
-    } catch (e: any) {
-      console.error("[LLM] Groq failed, falling back...", e.message);
-      errors.push(`Groq: ${e.message}`);
-    }
+  const groqKey = ENV.groqApiKey?.trim();
+  if (!groqKey || !groqKey.startsWith("gsk_")) {
+    throw new Error(
+      "GROQ_API_KEY não configurada ou inválida. Defina no .env uma chave que comece com gsk_ (console.groq.com)."
+    );
   }
-
-  // 2. Tentar Hugging Face se a chave existir
-  if (ENV.huggingFaceApiKey && ENV.huggingFaceApiKey.startsWith("hf_")) {
-    try {
-      return await invokeHuggingFace(params);
-    } catch (e: any) {
-      console.error("[LLM] Hugging Face failed, falling back...", e.message);
-      errors.push(`Hugging Face: ${e.message}`);
-    }
-  }
-
-  // 3. Fallback Final: Gemini
-  try {
-    return await invokeGemini(params);
-  } catch (e: any) {
-    console.error("[LLM] Gemini fallback failed!", e.message);
-    errors.push(`Gemini: ${e.message}`);
-    throw new Error(`All LLM providers failed: ${errors.join(" | ")}`);
-  }
+  return await invokeGroq(params);
 }
