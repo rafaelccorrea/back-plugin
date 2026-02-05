@@ -25,7 +25,7 @@ import { eq, and, inArray, desc } from "drizzle-orm";
 
 const AnalyzePayloadSchema = z.object({
   apiKey: z.string().min(1, "API Key is required"),
-  conversation: z.string().min(10, "Conversation must be at least 10 characters"),
+  conversation: z.string().min(2, "Conversation must be at least 2 characters"),
   contactName: z.string().optional(),
   contactPhone: z.string().optional(),
 });
@@ -70,39 +70,47 @@ export const leadsRouter = router({
     .input(AnalyzePayloadSchema)
     .mutation(async ({ input }) => {
       try {
-        // Sanitizar input e limpar API Key
         const sanitized = sanitizeObject(input);
         const apiKey = cleanApiKey(sanitized.apiKey);
 
-        // Buscar usuário pelo API Key (usa getUserByApiKey para compatibilidade com DB sem colunas capture*)
+        console.log("[ChatLead API] leads.analyze chamado:", {
+          contactName: sanitized.contactName || "(vazio)",
+          contactPhone: sanitized.contactPhone ? "***" + sanitized.contactPhone.slice(-4) : "(vazio)",
+          conversationLength: (sanitized.conversation || "").length,
+          hasApiKey: !!apiKey,
+        });
+
         const user = await getUserByApiKey(apiKey);
         if (!user) {
+          console.warn("[ChatLead API] API Key inválida ou usuário não encontrado");
           throw new TRPCError({
             code: "UNAUTHORIZED",
             message: "Invalid API Key",
           });
         }
+        console.log("[ChatLead API] Usuário OK: userId=", user.id);
+
         const db = await getDb();
         if (!db) throw new Error("Database not available");
 
-        // Log extensão (nome/telefone enviados pelo plugin)
-        if (sanitized.contactName || sanitized.contactPhone) {
-          console.log("[ChatLead API] Extensão enviou:", {
-            contactName: sanitized.contactName || "(vazio)",
-            contactPhone: sanitized.contactPhone ? "***" + sanitized.contactPhone.slice(-4) : "(vazio)",
-          });
-        }
-
-        // Analyze conversation with AI
         const analysis = await analyzeConversation(
           sanitized.conversation,
           sanitized.contactName || "Unknown"
         );
 
+        console.log("[ChatLead API] Análise IA:", {
+          isPotentialLead: analysis.isPotentialLead,
+          score: analysis.score,
+          name: analysis.name,
+          objective: analysis.objective,
+        });
+        if (!analysis.isPotentialLead) {
+          console.log("[ChatLead API] Conversa não considerada lead pela IA (wasCaptured=false).");
+        }
+
         let wasCaptured = false;
         let leadId: number | undefined;
 
-        // FILTRO: Só salva e notifica se for um lead em potencial
         if (analysis.isPotentialLead) {
           // Preferir telefone capturado da extensão (header WhatsApp Web), senão o extraído pela IA
           const rawExt = sanitized.contactPhone?.trim().replace(/\D/g, "") || "";
@@ -219,6 +227,12 @@ export const leadsRouter = router({
             }
           }
         }
+
+        console.log("[ChatLead API] Resposta:", {
+          wasCaptured,
+          leadId,
+          contactName: sanitized.contactName || "(vazio)",
+        });
 
         return {
           success: true,
