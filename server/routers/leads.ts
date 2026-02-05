@@ -4,7 +4,9 @@ import {
   createLead,
   getDb,
   getLeadsByUserId,
+  getLeadsByUserIdWithoutFunnelColumns,
   getLeadById,
+  getLeadByIdWithoutFunnelColumns,
   updateLead,
   getCurrentMonthUsage,
   getUserSubscription,
@@ -48,6 +50,8 @@ const UpdateLeadSchema = z.object({
   urgency: z.enum(["cold", "warm", "hot"]).optional(),
   notes: z.string().optional(),
   qualificationChecklist: z.string().optional(),
+  nextAction: z.string().optional(),
+  expectedCloseAt: z.union([z.string().datetime(), z.date(), z.null()]).optional(),
 });
 
 /**
@@ -269,38 +273,69 @@ export const leadsRouter = router({
   list: protectedProcedure
     .input(
       z.object({
-        limit: z.number().min(1).max(100).default(50),
+        limit: z.number().min(1).max(500).default(50),
         offset: z.number().min(0).default(0),
       })
     )
     .query(async ({ ctx, input }) => {
+      const formatExpectedCloseAt = (v: unknown): string | null => {
+        if (v == null) return null;
+        if (v instanceof Date) return v.toISOString();
+        if (typeof v === "string") return v;
+        return null;
+      };
+
+      const mapLead = (lead: Record<string, unknown> & { id: number; createdAt: Date }) => ({
+        id: lead.id,
+        name: lead.name,
+        phone: lead.phone,
+        email: lead.email,
+        objective: lead.objective,
+        propertyType: lead.propertyType,
+        neighborhood: lead.neighborhood,
+        budget: lead.budget,
+        urgency: lead.urgency,
+        score: lead.score,
+        status: lead.status,
+        qualificationChecklist: lead.qualificationChecklist,
+        nextAction: lead.nextAction ?? null,
+        expectedCloseAt: formatExpectedCloseAt(lead.expectedCloseAt),
+        createdAt: lead.createdAt,
+      });
+
       try {
         const leadsList = await getLeadsByUserId(
           ctx.user.id,
           input.limit,
           input.offset
         );
-
         return {
           success: true,
-          data: leadsList.map((lead) => ({
-            id: lead.id,
-            name: lead.name,
-            phone: lead.phone,
-            email: lead.email,
-            objective: lead.objective,
-            propertyType: lead.propertyType,
-            neighborhood: lead.neighborhood,
-            budget: lead.budget,
-            urgency: lead.urgency,
-            score: lead.score,
-            status: lead.status,
-            qualificationChecklist: lead.qualificationChecklist,
-            createdAt: lead.createdAt,
-          })),
+          data: leadsList.map((l) => mapLead(l as Record<string, unknown> & { id: number; createdAt: Date })),
         };
-      } catch (error) {
-        console.error("[Leads] Error listing leads:", error);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        const isMissingColumn = /column.*does not exist|nextAction|expectedCloseAt/i.test(msg);
+        if (isMissingColumn) {
+          try {
+            const leadsList = await getLeadsByUserIdWithoutFunnelColumns(
+              ctx.user.id,
+              input.limit,
+              input.offset
+            );
+            return {
+              success: true,
+              data: leadsList.map((l) => mapLead({ ...l, nextAction: null, expectedCloseAt: null })),
+            };
+          } catch (fallbackErr) {
+            console.error("[Leads] Error listing leads (fallback):", fallbackErr);
+            throw new TRPCError({
+              code: "INTERNAL_SERVER_ERROR",
+              message: "Failed to list leads",
+            });
+          }
+        }
+        console.error("[Leads] Error listing leads:", err);
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
           message: "Failed to list leads",
@@ -325,53 +360,68 @@ export const leadsRouter = router({
       })
     )
     .query(async ({ ctx, input }) => {
+      const formatExpectedCloseAt = (v: unknown): string | null => {
+        if (v == null) return null;
+        if (v instanceof Date) return v.toISOString();
+        if (typeof v === "string") return v;
+        return null;
+      };
+
+      let lead: Awaited<ReturnType<typeof getLeadById>> | Awaited<ReturnType<typeof getLeadByIdWithoutFunnelColumns>> | undefined;
       try {
-        const lead = await getLeadById(input.id);
-
-        if (!lead) {
+        lead = await getLeadById(input.id);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (/column.*does not exist|nextAction|expectedCloseAt/i.test(msg)) {
+          lead = await getLeadByIdWithoutFunnelColumns(input.id);
+        } else {
+          console.error("[Leads] Error getting lead:", err);
           throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Lead not found",
+            code: "INTERNAL_SERVER_ERROR",
+            message: "Failed to get lead",
           });
         }
+      }
 
-        // Verify ownership
-        if (lead.userId !== ctx.user.id) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "You do not have access to this lead",
-          });
-        }
-
-        return {
-          success: true,
-          data: {
-            id: lead.id,
-            name: lead.name,
-            phone: lead.phone,
-            email: lead.email,
-            objective: lead.objective,
-            propertyType: lead.propertyType,
-            neighborhood: lead.neighborhood,
-            budget: lead.budget,
-            urgency: lead.urgency,
-            score: lead.score,
-            summary: lead.summary,
-            suggestedResponse: lead.suggestedResponse,
-            status: lead.status,
-            qualificationChecklist: lead.qualificationChecklist,
-            createdAt: lead.createdAt,
-            updatedAt: lead.updatedAt,
-          },
-        };
-      } catch (error) {
-        console.error("[Leads] Error getting lead:", error);
-        if (error instanceof TRPCError) throw error;
+      if (!lead) {
         throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Failed to get lead",
+          code: "NOT_FOUND",
+          message: "Lead not found",
         });
       }
+
+      // Verify ownership
+      if (lead.userId !== ctx.user.id) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "You do not have access to this lead",
+        });
+      }
+
+      const row = lead as Record<string, unknown> & { id: number; userId: number; createdAt: Date; updatedAt: Date };
+      return {
+        success: true,
+        data: {
+          id: lead.id,
+          name: lead.name,
+          phone: lead.phone,
+          email: lead.email,
+          objective: lead.objective,
+          propertyType: lead.propertyType,
+          neighborhood: lead.neighborhood,
+          budget: lead.budget,
+          urgency: lead.urgency,
+          score: lead.score,
+          summary: lead.summary,
+          suggestedResponse: lead.suggestedResponse,
+          status: lead.status,
+          qualificationChecklist: lead.qualificationChecklist,
+          nextAction: row.nextAction ?? null,
+          expectedCloseAt: formatExpectedCloseAt(row.expectedCloseAt),
+          createdAt: lead.createdAt,
+          updatedAt: lead.updatedAt,
+        },
+      };
     }),
 
   /**
@@ -385,52 +435,91 @@ export const leadsRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      let lead: Awaited<ReturnType<typeof getLeadById>> | Awaited<ReturnType<typeof getLeadByIdWithoutFunnelColumns>> | undefined;
       try {
-        const lead = await getLeadById(input.id);
-
-        if (!lead) {
+        lead = await getLeadById(input.id);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (/column.*does not exist|nextAction|expectedCloseAt/i.test(msg)) {
+          lead = await getLeadByIdWithoutFunnelColumns(input.id);
+        } else {
+          console.error("[Leads] Error getting lead in update:", err);
           throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Lead not found",
+            code: "INTERNAL_SERVER_ERROR",
+            message: "Failed to update lead",
           });
         }
+      }
 
-        // Verify ownership
-        if (lead.userId !== ctx.user.id) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "You do not have access to this lead",
-          });
-        }
-
-        await updateLead(input.id, input.updates);
-
-        const updated = await getLeadById(input.id);
-
-        // Disparar webhook de integração (apenas planos professional/enterprise)
-        if (updated) {
-          void dispatchOutgoingWebhook(ctx.user.id, "lead.updated", {
-            leadId: updated.id,
-            name: updated.name ?? null,
-            phone: updated.phone ?? null,
-            email: updated.email ?? null,
-            status: updated.status ?? null,
-            summary: updated.summary ?? null,
-          });
-        }
-
-        return {
-          success: true,
-          data: updated,
-        };
-      } catch (error) {
-        console.error("[Leads] Error updating lead:", error);
-        if (error instanceof TRPCError) throw error;
+      if (!lead) {
         throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Failed to update lead",
+          code: "NOT_FOUND",
+          message: "Lead not found",
         });
       }
+
+      if (lead.userId !== ctx.user.id) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "You do not have access to this lead",
+        });
+      }
+
+      const updates = { ...input.updates } as Record<string, unknown>;
+      if (updates.expectedCloseAt !== undefined) {
+        updates.expectedCloseAt =
+          updates.expectedCloseAt === null
+            ? null
+            : typeof updates.expectedCloseAt === "string"
+              ? new Date(updates.expectedCloseAt)
+              : updates.expectedCloseAt;
+      }
+
+      try {
+        await updateLead(input.id, updates as Parameters<typeof updateLead>[1]);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (/column.*does not exist|nextAction|expectedCloseAt/i.test(msg)) {
+          const { nextAction: _na, expectedCloseAt: _ea, ...rest } = updates;
+          if (Object.keys(rest).length > 0) {
+            await updateLead(input.id, rest as Parameters<typeof updateLead>[1]);
+          }
+        } else {
+          console.error("[Leads] Error updating lead:", err);
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "Failed to update lead",
+          });
+        }
+      }
+
+      let updated: Awaited<ReturnType<typeof getLeadById>> | Awaited<ReturnType<typeof getLeadByIdWithoutFunnelColumns>> | undefined;
+      try {
+        updated = await getLeadById(input.id);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (/column.*does not exist|nextAction|expectedCloseAt/i.test(msg)) {
+          updated = await getLeadByIdWithoutFunnelColumns(input.id);
+        } else {
+          throw err;
+        }
+      }
+
+      if (updated) {
+        void dispatchOutgoingWebhook(ctx.user.id, "lead.updated", {
+          leadId: updated.id,
+          name: updated.name ?? null,
+          phone: updated.phone ?? null,
+          email: updated.email ?? null,
+          status: updated.status ?? null,
+          summary: updated.summary ?? null,
+        });
+      }
+
+      return {
+        success: true,
+        data: updated,
+      };
     }),
 
   /**

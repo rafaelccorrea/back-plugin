@@ -195,6 +195,8 @@ export const leads = pgTable(
     status: leadStatusEnum("status").default("new"),
     source: varchar("source", { length: 255 }).default("whatsapp_extension"),
     qualificationChecklist: text("qualificationChecklist"),
+    nextAction: text("nextAction"),
+    expectedCloseAt: timestamp("expectedCloseAt"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().notNull(),
   },
@@ -275,6 +277,58 @@ export const pushSubscriptions = pgTable(
 );
 
 export type PushSubscription = typeof pushSubscriptions.$inferSelect;
+
+/**
+ * Eventos do pré-atendimento (extensão envia; dashboard exibe em tempo quase real).
+ */
+export const preAttendanceEventTypeEnum = pgEnum("pre_attendance_event_type", [
+  "conversation_read",
+  "lead_captured",
+  "ai_reply_sent",
+  "manual_reply_sent",
+]);
+
+export const preAttendanceEvents = pgTable(
+  "preAttendanceEvents",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("userId").notNull(),
+    eventType: preAttendanceEventTypeEnum("eventType").notNull(),
+    contactName: varchar("contactName", { length: 255 }),
+    contactPhone: varchar("contactPhone", { length: 32 }),
+    leadId: integer("leadId"),
+    messageText: text("messageText"),
+    conversationSnippet: text("conversationSnippet"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    userIdx: index("pre_attendance_user_idx").on(table.userId),
+    createdAtIdx: index("pre_attendance_created_idx").on(table.createdAt),
+  })
+);
+
+export type PreAttendanceEvent = typeof preAttendanceEvents.$inferSelect;
+export type InsertPreAttendanceEvent = typeof preAttendanceEvents.$inferInsert;
+
+/**
+ * Mensagem pendente para enviar no WhatsApp (dashboard define; extensão envia quando abrir o chat).
+ */
+export const pendingWhatsAppMessages = pgTable(
+  "pendingWhatsAppMessages",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("userId").notNull(),
+    contactPhone: varchar("contactPhone", { length: 32 }).notNull(),
+    messageText: text("messageText").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    userPhoneIdx: uniqueIndex("pending_whatsapp_user_phone").on(table.userId, table.contactPhone),
+  })
+);
+
+export type PendingWhatsAppMessage = typeof pendingWhatsAppMessages.$inferSelect;
+export type InsertPendingWhatsAppMessage = typeof pendingWhatsAppMessages.$inferInsert;
 export type InsertPushSubscription = typeof pushSubscriptions.$inferInsert;
 
 /**

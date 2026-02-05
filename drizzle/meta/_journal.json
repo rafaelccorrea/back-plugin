@@ -113,6 +113,20 @@
       "when": 1738283000000,
       "tag": "0015_capture_form",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1738283100000,
+      "tag": "0016_pre_attendance",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1738283200000,
+      "tag": "0017_leads_funnel_fields",
+      "breakpoints": true
     }
   ]
 }

@@ -21,6 +21,7 @@ import { integrationsRouter } from "./routers/integrations";
 import { automationsRouter } from "./routers/automations";
 import { openClawAutomationsRouter } from "./routers/openclaw-automations";
 import { aiAssistantRouter } from "./routers/ai-assistant";
+import { preAttendanceRouter } from "./routers/preAttendance";
 
 export const appRouter = router({
     // if you need to use socket.io, read and register route in server/_core/index.ts, all api should start with '/api/' so that the gateway can route correctly
@@ -54,6 +55,7 @@ export const appRouter = router({
   automations: automationsRouter,
   openClawAutomations: openClawAutomationsRouter,
   aiAssistant: aiAssistantRouter,
+  preAttendance: preAttendanceRouter,
 });
 
 export type AppRouter = typeof appRouter;

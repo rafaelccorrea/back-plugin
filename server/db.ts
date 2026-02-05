@@ -46,6 +46,51 @@ export async function getDb() {
   return _db;
 }
 
+/** Cria tabelas de pré-atendimento se não existirem (útil quando a migration não foi aplicada neste banco). */
+export async function ensurePreAttendanceTables(): Promise<void> {
+  await getDb();
+  if (!_pool) return;
+  const client = await _pool.connect();
+  try {
+    try {
+      await client.query(
+        `CREATE TYPE "pre_attendance_event_type" AS ENUM ('conversation_read', 'lead_captured', 'ai_reply_sent', 'manual_reply_sent')`
+      );
+    } catch (e: unknown) {
+      if ((e as { code?: string })?.code !== "42710") throw e; // 42710 = duplicate_object (enum já existe)
+    }
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS "preAttendanceEvents" (
+        "id" serial PRIMARY KEY NOT NULL,
+        "userId" integer NOT NULL,
+        "eventType" "pre_attendance_event_type" NOT NULL,
+        "contactName" varchar(255),
+        "contactPhone" varchar(32),
+        "leadId" integer,
+        "messageText" text,
+        "conversationSnippet" text,
+        "createdAt" timestamp DEFAULT now() NOT NULL
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS "pre_attendance_user_idx" ON "preAttendanceEvents" ("userId")`);
+    await client.query(`CREATE INDEX IF NOT EXISTS "pre_attendance_created_idx" ON "preAttendanceEvents" ("createdAt")`);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS "pendingWhatsAppMessages" (
+        "id" serial PRIMARY KEY NOT NULL,
+        "userId" integer NOT NULL,
+        "contactPhone" varchar(32) NOT NULL,
+        "messageText" text NOT NULL,
+        "createdAt" timestamp DEFAULT now() NOT NULL
+      )
+    `);
+    await client.query(
+      `CREATE UNIQUE INDEX IF NOT EXISTS "pending_whatsapp_user_phone" ON "pendingWhatsAppMessages" ("userId", "contactPhone")`
+    );
+  } finally {
+    client.release();
+  }
+}
+
 // ============================================================================
 // USER MANAGEMENT
 // ============================================================================
@@ -331,6 +376,47 @@ export async function getLeadsByUserId(userId: number, limit = 50, offset = 0) {
     .offset(offset);
 }
 
+/** Lista leads sem as colunas do funil (nextAction, expectedCloseAt). Use quando a tabela ainda não tiver essas colunas. */
+export async function getLeadsByUserIdWithoutFunnelColumns(
+  userId: number,
+  limit = 50,
+  offset = 0
+) {
+  const db = await getDb();
+  if (!db) {
+    throw new Error("Database not available");
+  }
+
+  return await db
+    .select({
+      id: leads.id,
+      userId: leads.userId,
+      organizationId: leads.organizationId,
+      name: leads.name,
+      phone: leads.phone,
+      email: leads.email,
+      objective: leads.objective,
+      propertyType: leads.propertyType,
+      neighborhood: leads.neighborhood,
+      budget: leads.budget,
+      urgency: leads.urgency,
+      score: leads.score,
+      summary: leads.summary,
+      suggestedResponse: leads.suggestedResponse,
+      rawConversation: leads.rawConversation,
+      status: leads.status,
+      source: leads.source,
+      qualificationChecklist: leads.qualificationChecklist,
+      createdAt: leads.createdAt,
+      updatedAt: leads.updatedAt,
+    })
+    .from(leads)
+    .where(eq(leads.userId, userId))
+    .orderBy((t) => t.createdAt)
+    .limit(limit)
+    .offset(offset);
+}
+
 export async function getLeadById(leadId: number) {
   const db = await getDb();
   if (!db) {
@@ -344,6 +430,44 @@ export async function getLeadById(leadId: number) {
     .limit(1);
 
   return result.length > 0 ? result[0] : undefined;
+}
+
+/** Busca um lead por ID sem as colunas do funil. Use quando a tabela ainda não tiver nextAction/expectedCloseAt. */
+export async function getLeadByIdWithoutFunnelColumns(leadId: number) {
+  const db = await getDb();
+  if (!db) {
+    throw new Error("Database not available");
+  }
+
+  const result = await db
+    .select({
+      id: leads.id,
+      userId: leads.userId,
+      organizationId: leads.organizationId,
+      name: leads.name,
+      phone: leads.phone,
+      email: leads.email,
+      objective: leads.objective,
+      propertyType: leads.propertyType,
+      neighborhood: leads.neighborhood,
+      budget: leads.budget,
+      urgency: leads.urgency,
+      score: leads.score,
+      summary: leads.summary,
+      suggestedResponse: leads.suggestedResponse,
+      rawConversation: leads.rawConversation,
+      status: leads.status,
+      source: leads.source,
+      qualificationChecklist: leads.qualificationChecklist,
+      createdAt: leads.createdAt,
+      updatedAt: leads.updatedAt,
+    })
+    .from(leads)
+    .where(eq(leads.id, leadId))
+    .limit(1);
+
+  if (result.length === 0) return undefined;
+  return { ...result[0], nextAction: null, expectedCloseAt: null };
 }
 
 export async function updateLead(
